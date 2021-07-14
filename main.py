@@ -13,8 +13,7 @@ import os
 import random
 from typing import List
 from src.model.three_variable import BertMathThreeVariables
-from sympy import symbols, solve
-import math
+from src.model.scoring_model import ScoringModel
 
 
 def set_seed(args):
@@ -58,6 +57,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--temperature', type=float, default=1.0, help="The temperature during the training")
     parser.add_argument('--fp16', type=int, default=0, choices=[0,1], help="using fp16 to train the model")
 
+    parser.add_argument('--use_binary', type=int, default=1, choices=[0, 1], help="using fp16 to train the model")
+
 
     # testing a pretrained model
     parser.add_argument('--cut_off', type=float, default=-100, help="cut off probability that we don't want to answer")
@@ -81,7 +82,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
-    model = BertMathThreeVariables.from_pretrained(bert_model_name, num_labels=num_labels).to(dev)
+    MODEL_NAME = ScoringModel if config.use_binary else BertMathThreeVariables
+    model = MODEL_NAME.from_pretrained(bert_model_name, num_labels=num_labels).to(dev)
 
     scaler = None
     if config.fp16:
@@ -119,14 +121,14 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
         if valid_dataloader is not None:
-            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), idx2labels=idx2labels, pretty_idx2labels=pretty_idx2labels)
+            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), idx2labels=idx2labels, pretty_idx2labels=pretty_idx2labels, use_binary=config.use_binary)
             if performance > best_performance:
                 print(f"[Model Info] Saving the best model...")
                 best_performance = performance
                 model.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
-    model = BertMathThreeVariables.from_pretrained(f"model_files/{config.model_folder}").to(dev)
+    model = MODEL_NAME.from_pretrained(f"model_files/{config.model_folder}").to(dev)
     if config.fp16:
         model.half()
         model.save_pretrained(f"model_files/{config.model_folder}")
@@ -136,25 +138,28 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device,
              fp16:bool, eval_answer: bool = False ,
-             result_file:str = None, err_file:str = None, idx2labels=None, pretty_idx2labels=None) -> float:
+             result_file:str = None, err_file:str = None, idx2labels=None, pretty_idx2labels=None,
+             use_binary: bool = False) -> float:
     model.eval()
     predictions = []
     labels = []
-    predicted_prob = []
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
                 logits = model(input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
                                sent_starts = feature.sent_starts.to(dev), sent_ends = feature.sent_ends.to(dev)).logits
-            preds = logits.softmax(dim=-1)
-            preds = preds.cpu().numpy()
+            if use_binary:
+                # logits: batch_size, num_labels, 2
+                logits = logits[:, :, 1]
+            _, current_prediction = logits.max(dim=-1)
 
-            current_prediction = np.argmax(preds, axis=1)
-            curr_pred_prob = np.squeeze(
-                np.take_along_axis(preds, np.expand_dims(current_prediction, axis=1), axis=1), axis=1)
-            predicted_prob.extend(curr_pred_prob)
-            predictions.extend(current_prediction)
-            labels.extend(feature.label_id.cpu().numpy())
+            predictions.extend(current_prediction.cpu().numpy().tolist())
+            label_id = feature.label_id.cpu().numpy()
+            if use_binary:
+                xs, ys = np.where(label_id==1)
+                assert len(xs) == len(current_prediction)
+                label_id = ys
+            labels.extend(label_id)
 
     predictions = np.array(predictions)
     labels = np.array(labels)
@@ -215,9 +220,11 @@ def main():
     # Read dataset
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
-        dataset = QuestionDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, use_four_variables=opt.four_variables)
+        dataset = QuestionDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, use_four_variables=opt.four_variables,
+                                  use_binary=opt.use_binary)
         print("[Data Info] Reading validation data", flush=True)
-        eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, use_four_variables=opt.four_variables)
+        eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, use_four_variables=opt.four_variables,
+                                  use_binary=opt.use_binary)
 
         # Prepare data loader
         print("[Data Info] Loading training data", flush=True)
@@ -233,12 +240,14 @@ def main():
                       dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
                       idx2labels=idx2labels,
                       pretty_idx2labels=pretty_idx2labels)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), use_binary=opt.use_binary)
     else:
         print(f"Testing the model now.")
-        model = BertMathThreeVariables.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
+        MODEL_NAME = ScoringModel if conf.use_binary else BertMathThreeVariables
+        model = MODEL_NAME.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
-        eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num)
+        eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num,
+                                  use_binary=opt.use_binary)
         print("[Data Info] Loading validation data", flush=True)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers,
                                       collate_fn=eval_dataset.collate_function)

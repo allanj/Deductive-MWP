@@ -13,7 +13,7 @@ class Config:
         self.dev_num = args.dev_num
         self.max_seq_length = args.max_seq_length
 
-        self.generated_max_length = args.generated_max_length
+        self.generated_max_length = args.generated_max_length if "generated_max_length"  in args.__dict__ else 0
 
 
         self.max_num_choices = args.max_num_choices if "max_num_choices" in args.__dict__ else 0
@@ -31,6 +31,7 @@ class Config:
         self.parallel = args.parallel if "parallel" in args.__dict__ else 0
         self.temperature = args.temperature if "temperature" in args.__dict__ else 0
         self.fp16 = args.fp16
+        self.use_binary = args.use_binary if "use_binary" in args.__dict__ else 0
 
         # model
         self.model_folder = args.model_folder

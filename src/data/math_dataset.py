@@ -64,8 +64,10 @@ class QuestionDataset(Dataset):
                  tokenizer: PreTrainedTokenizerFast,
                  number: int = -1,
                  use_four_variables: bool = True,
-                 test_strings:List[str] = None) -> None:
+                 test_strings:List[str] = None,
+                 use_binary: bool  =False) -> None:
         self.tokenizer = tokenizer
+        self.use_binary = use_binary
         if test_strings:
             self._features = []
             for question in test_strings:
@@ -176,7 +178,11 @@ class QuestionDataset(Dataset):
                         label_id = lid
                         label2count[label_id] +=1
                         break ## because only one label should be available for three variables
-
+                if use_binary:
+                    cands = [0] * len(labels)
+                    assert label_id != -1
+                    cands[label_id] = 1
+                    label_id = cands
                 self._features.append(Feature(input_ids=all_ids,
                                               attention_mask=attn_mask,
                                               sent_starts=sent_starts,
@@ -199,10 +205,11 @@ class QuestionDataset(Dataset):
             mask = feature.attention_mask + [0] * padding_length
             sent_starts = feature.sent_starts + [0] * (max_num_sents - len(feature.sent_starts))
             sent_ends = feature.sent_ends + [0] * (max_num_sents - len(feature.sent_ends))
+            label_id = feature.label_id if not self.use_binary else np.asarray(feature.label_id)
             batch[i] = Feature(input_ids=np.asarray(input_ids),
                                attention_mask=np.asarray(mask),
                                sent_starts=np.asarray(sent_starts),
-                               sent_ends=np.asarray(sent_ends), label_id=feature.label_id)
+                               sent_ends=np.asarray(sent_ends), label_id=label_id)
         # If `is_mtl` is true, the first one is the dataset name
         results = Feature(*(default_collate(samples) for samples in zip(*batch)))
         return results
