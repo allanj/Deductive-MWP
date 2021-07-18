@@ -17,22 +17,35 @@ Feature = collections.namedtuple('Feature', 'input_ids attention_mask sent_start
 Feature.__new__.__defaults__ = (None,) * 5
 
 from sympy import symbols, solve
+# labels = [
+#     '0 1 2 +', # v0 + v1 = v2
+#     '0 2 1 +',
+#     '1 2 0 +',
+#     '0 1 2 *',
+#     '0 2 1 *',
+#     '1 2 0 *',
+# ]
+
 labels = [
-    '0 1 2 +', # v0 + v1 = v2
-    '0 2 1 +',
-    '1 2 0 +',
-    '0 1 2 *',
-    '0 2 1 *',
-    '1 2 0 *',
+    '+','-', '-_rev', '*', '/', '/_rev'
 ]
 
+# pretty_labels = [
+#     'V0 + V1 = V2', # v0 + v1 = v2
+#     'V0 + V2 = V1',
+#     'V1 + V2 = V0',
+#     'V0 * V1 = V2',
+#     'V0 * V2 = V1',
+#     'V1 * V2 = V0'
+# ]
+
 pretty_labels = [
-    'V0 + V1 = V2', # v0 + v1 = v2
-    'V0 + V2 = V1',
-    'V1 + V2 = V0',
-    'V0 * V1 = V2',
-    'V0 * V2 = V1',
-    'V1 * V2 = V0'
+    'x=v1+v2', # v0 + v1 = v2
+    'x=v1-v2', # v0 + v1 = v2
+'x=v2-v1', # v0 + v1 = v2
+'x=v1*v2', # v0 + v1 = v2
+'x=v1/v2', # v0 + v1 = v2
+'x=v2/v1', # v0 + v1 = v2
 ]
 
 
@@ -159,25 +172,33 @@ class QuestionDataset(Dataset):
                     else:
                         all_ids.append(tokenizer.convert_tokens_to_ids(['？'])[0])
                     start = len(all_ids)
+                all_ids.append(tokenizer.sep_token_id)
                 attn_mask = [1]*len(all_ids)
-                label_id = -1
-                curr_labels = labels if len(nums) == 3 else fv_labels
-                for lid, possible_label in enumerate(curr_labels):
-                    vals = possible_label.split()
-                    indices = [int(v) for v in vals[:3]]
-                    if all([element != ans_idx for element in indices]): ## no x variable
-                        continue
-                    expr_vals = [nums[idx] if idx != ans_idx else symbols('x') for idx in indices]
-                    expr = None
-                    if vals[-1] == "+":
-                        expr = expr_vals[0] + expr_vals[1] - expr_vals[2]
-                    elif vals[-1] == "*":
-                        expr = expr_vals[0] * expr_vals[1] / expr_vals[2] - 1
-                    sol = solve(expr)
-                    if len(sol) > 0 and math.fabs((sol[0] - ans)) < 1e-5:
-                        label_id = lid
-                        label2count[label_id] +=1
-                        break ## because only one label should be available for three variables
+                # label_id = -1
+                equation = inst["equation"]
+                vals = equation.split(" ")
+                gold_operator = vals[3]
+                if vals[2].strip() == "v1":
+                    label_id = labels.index(gold_operator)
+                else:
+                    label_id = labels.index(gold_operator + "_rev")
+                # curr_labels = labels if len(nums) == 3 else fv_labels
+                # for lid, possible_label in enumerate(curr_labels):
+                #     vals = possible_label.split()
+                #     indices = [int(v) for v in vals[:3]]
+                #     if all([element != ans_idx for element in indices]): ## no x variable
+                #         continue
+                #     expr_vals = [nums[idx] if idx != ans_idx else symbols('x') for idx in indices]
+                #     expr = None
+                #     if vals[-1] == "+":
+                #         expr = expr_vals[0] + expr_vals[1] - expr_vals[2]
+                #     elif vals[-1] == "*":
+                #         expr = expr_vals[0] * expr_vals[1] / expr_vals[2] - 1
+                #     sol = solve(expr)
+                #     if len(sol) > 0 and math.fabs((sol[0] - ans)) < 1e-5:
+                #         label_id = lid
+                #         label2count[label_id] +=1
+                #         break ## because only one label should be available for three variables
                 if use_binary:
                     cands = [0] * len(labels)
                     assert label_id != -1

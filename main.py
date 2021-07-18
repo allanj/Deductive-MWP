@@ -253,7 +253,7 @@ def main():
                                       collate_fn=eval_dataset.collate_function)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), eval_answer=True,
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), eval_answer=False,
                  result_file=res_file, err_file=err_file,
                       idx2labels=idx2labels,
                       pretty_idx2labels=pretty_idx2labels)

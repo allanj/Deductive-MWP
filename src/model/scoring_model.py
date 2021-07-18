@@ -173,19 +173,22 @@ class ScoringModel(BertPreTrainedModel):
         batch_size, _, _, hidden_size = last_hidden_state.size()
         sent_start_states = torch.gather(last_hidden_state, 2, sent_starts.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
         sent_end_states = torch.gather(last_hidden_state, 2, sent_ends.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
-        sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
-        summed_states = sent_states.sum(dim=-2)
-        # ## batch_size, num_variables, hidden_size
-        # _, num_variables = sent_starts.size()
-        # indexs = torch.arange(0, num_variables, device=sent_starts.device)
-        # comb = torch.combinations(indexs, r = num_variables - 1)
 
-        logits = self.sentence_feedforward(summed_states)
+        # ## batch_size, num_m0, num_variables, hidden_size
+        sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
+        ## batch_size, num_m0, hidden_size
+        summed_states = sent_states.sum(dim=-2)
+
+        ## batch_size, num_m0, num_labels, hidden_size
+        label_rep = torch.stack([layer(summed_states) for layer in self.linears], dim=2)
+
+        ## batch_size, num_m0, num_labels, 2 (0,1)
+        logits = self.label_rep2label(label_rep)
 
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            loss = loss_fct(logits.view(-1, 2), labels.view(-1))
         if not return_dict:
             output = (logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
