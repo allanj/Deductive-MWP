@@ -38,6 +38,7 @@ class FourVariableDataset(Dataset):
             all_attn_mask = []
             gold_m0 = obj["m0"]
             all_label_ids = []
+            label_sum = 0
             assert len(all_generated_m0) == 18
             for m0_idx, generated_m0_obj in enumerate(all_generated_m0):
                 all_strings = [var["concat_text"] for var in all_variables_sorted]
@@ -51,7 +52,7 @@ class FourVariableDataset(Dataset):
                 if left_idx + right_idx <= all_var_names[0]:
                     m0_on_smaller = True
                 operator = generated_m0_obj["operator"].replace("x", "*")
-                m0_cand = "v" + left_idx_str + operator + "v" + right_idx_str
+                m0_cand = "v" + left_idx_str + operator + "v" + right_idx_str if not operator.endswith("_rev") else "v" + right_idx_str + operator[0] + "v" + left_idx_str
                 curr_m0_label_id = 0
                 if m0_cand == gold_m0:
                     curr_m0_label_id = 1
@@ -85,6 +86,9 @@ class FourVariableDataset(Dataset):
                                 label_ids[labels.index("/")] = 1
                             else:
                                 label_ids[labels.index("/_rev")] = 1
+                label_sum += sum(label_ids)
+                if label_sum > 1:
+                    print("some error")
                 all_label_ids.append(label_ids)
                 gen_m0_string = generated_m0_obj["generated_m0"]
                 left_var = v_name2variables["v" + left_idx_str]
@@ -118,6 +122,7 @@ class FourVariableDataset(Dataset):
                 all_sent_starts.append(sent_starts)
                 all_sent_ends.append(sent_ends)
                 all_attn_mask.append(attn_mask)
+            assert label_sum == 1
             self._features.append(Feature(dataset='4_var', input_ids=all_ids_diff_m0,
                                           attention_mask=all_attn_mask,
                                           sent_starts=all_sent_starts,
@@ -154,10 +159,10 @@ class FourVariableDataset(Dataset):
 
 if __name__ == '__main__':
     tokenizer = MBartTokenizerFast.from_pretrained('facebook/mbart-large-cc25')
-    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=10)
-    from torch.utils.data import DataLoader
-
-    loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
-    for batch in loader:
-        pass
+    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=-1)
+    # from torch.utils.data import DataLoader
+    #
+    # loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
+    # for batch in loader:
+    #     pass
         # print(batch)
