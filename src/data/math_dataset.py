@@ -13,7 +13,7 @@ import math
 from src.data.utils import fv_labels
 from collections import Counter
 
-Feature = collections.namedtuple('Feature', 'input_ids attention_mask sent_starts sent_ends label_id')
+Feature = collections.namedtuple('Feature', 'dataset input_ids attention_mask sent_starts sent_ends label_id')
 Feature.__new__.__defaults__ = (None,) * 5
 
 from sympy import symbols, solve
@@ -103,7 +103,7 @@ class QuestionDataset(Dataset):
                     start = len(all_ids)
                 attn_mask = [1] * len(all_ids)
                 label_id = -1
-                self._features.append(Feature(input_ids=all_ids,
+                self._features.append(Feature(dataset='3_var',input_ids=all_ids,
                                               attention_mask=attn_mask,
                                               sent_starts=sent_starts,
                                               sent_ends=sent_ends,
@@ -152,9 +152,11 @@ class QuestionDataset(Dataset):
                     for i, word in enumerate(words):
                         if word.startswith("<") and word.endswith(">"):
                             if variable[0] == 'x':
-                                words[i] = "多少"
+                                words[i] = " <quant> "
+                                # words[i] = "多少"
                             else:
-                                words[i] = str(curr_num)
+                                # words[i] = str(curr_num)
+                                words[i] = " <quant> "
                     sents.append(''.join(words))
                 inst["nums"] = nums
                 inst["ans"] = ans
@@ -204,7 +206,7 @@ class QuestionDataset(Dataset):
                     assert label_id != -1
                     cands[label_id] = 1
                     label_id = cands
-                self._features.append(Feature(input_ids=all_ids,
+                self._features.append(Feature(dataset='3_var', input_ids=all_ids,
                                               attention_mask=attn_mask,
                                               sent_starts=sent_starts,
                                               sent_ends=sent_ends,
@@ -227,7 +229,7 @@ class QuestionDataset(Dataset):
             sent_starts = feature.sent_starts + [0] * (max_num_sents - len(feature.sent_starts))
             sent_ends = feature.sent_ends + [0] * (max_num_sents - len(feature.sent_ends))
             label_id = feature.label_id if not self.use_binary else np.asarray(feature.label_id)
-            batch[i] = Feature(input_ids=np.asarray(input_ids),
+            batch[i] = Feature(dataset=feature.dataset, input_ids=np.asarray(input_ids),
                                attention_mask=np.asarray(mask),
                                sent_starts=np.asarray(sent_starts),
                                sent_ends=np.asarray(sent_ends), label_id=label_id)

@@ -118,7 +118,7 @@ class FourVariableDataset(Dataset):
                 all_sent_starts.append(sent_starts)
                 all_sent_ends.append(sent_ends)
                 all_attn_mask.append(attn_mask)
-            self._features.append(Feature(input_ids=all_ids_diff_m0,
+            self._features.append(Feature(dataset='4_var', input_ids=all_ids_diff_m0,
                                           attention_mask=all_attn_mask,
                                           sent_starts=all_sent_starts,
                                           sent_ends=all_sent_ends,
@@ -143,7 +143,7 @@ class FourVariableDataset(Dataset):
                 all_padded_attn_mask.append(padded_attn_mask)
             all_padded_ids = np.asarray(all_padded_ids)
             assert np.asarray(feature.label_id).sum()==1
-            batch[i] = Feature(input_ids=all_padded_ids,
+            batch[i] = Feature(dataset=feature.dataset, input_ids=all_padded_ids,
                               attention_mask=np.asarray(all_padded_attn_mask),
                               sent_starts=np.asarray(feature.sent_starts),
                               sent_ends=np.asarray(feature.sent_ends),

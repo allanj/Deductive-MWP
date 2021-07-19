@@ -41,7 +41,7 @@ class ScoringModel(BertPreTrainedModel):
         output_hidden_states=None,
         return_dict=None,
     ):
-        if dataset == "3_var":
+        if dataset[0] == "3_var":
             return self.forward(input_ids=input_ids,
                                 attention_mask=attention_mask,
                                 token_type_ids=token_type_ids,
@@ -54,8 +54,19 @@ class ScoringModel(BertPreTrainedModel):
                                 output_attentions=output_attentions,
                                 output_hidden_states=output_hidden_states,
                                 return_dict=return_dict)
-        elif dataset == "4_var":
-            return self.forward_four_variable()
+        elif dataset[0] == "4_var":
+            return self.forward_four_variable(input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                                position_ids=position_ids,
+                                sent_starts=sent_starts,
+                                sent_ends=sent_ends,
+                                head_mask=head_mask,
+                                inputs_embeds=inputs_embeds,
+                                labels=labels,
+                                output_attentions=output_attentions,
+                                output_hidden_states=output_hidden_states,
+                                return_dict=return_dict)
         else:
             raise NotImplementedError(f"forward not implemented for {dataset}")
 
