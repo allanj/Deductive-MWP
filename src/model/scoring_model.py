@@ -27,7 +27,7 @@ class ScoringModel(BertPreTrainedModel):
         self.label_rep2label = nn.Linear(config.hidden_size, 2) # 0 or 1
         self.init_weights()
 
-    def mtl_forward(self,
+    def forward(self,
         dataset=None,
         input_ids=None,
         attention_mask=None,
@@ -42,7 +42,7 @@ class ScoringModel(BertPreTrainedModel):
         return_dict=None,
     ):
         if dataset[0] == "3_var":
-            return self.forward(input_ids=input_ids,
+            return self.forward_three_variable(input_ids=input_ids,
                                 attention_mask=attention_mask,
                                 token_type_ids=token_type_ids,
                                 position_ids=position_ids,
@@ -70,7 +70,7 @@ class ScoringModel(BertPreTrainedModel):
         else:
             raise NotImplementedError(f"forward not implemented for {dataset}")
 
-    def forward(
+    def forward_three_variable(
         self,
         input_ids=None,
         attention_mask=None,

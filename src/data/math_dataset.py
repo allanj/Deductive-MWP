@@ -180,7 +180,7 @@ class QuestionDataset(Dataset):
                 equation = inst["equation"]
                 vals = equation.split(" ")
                 gold_operator = vals[3]
-                if vals[2].strip() == "v1":
+                if vals[2].strip() == "v1" or gold_operator in ["+", "*"]:
                     label_id = labels.index(gold_operator)
                 else:
                     label_id = labels.index(gold_operator + "_rev")

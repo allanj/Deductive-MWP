@@ -61,7 +61,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--fp16', type=int, default=0, choices=[0,1], help="using fp16 to train the model")
 
     parser.add_argument('--use_binary', type=int, default=1, choices=[0, 1], help="using fp16 to train the model")
-
+    parser.add_argument('--parallel', type=int, default=0, choices=[0,1], help="parallelizing model")
 
     # testing a pretrained model
     parser.add_argument('--cut_off', type=float, default=-100, help="cut off probability that we don't want to answer")
@@ -86,6 +86,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     t_total = int((len(train_dataloader) + len(fv_train_loader)) // gradient_accumulation_steps * num_epochs)
 
     model = ScoringModel.from_pretrained(bert_model_name, num_labels=num_labels).to(dev)
+    if config.parallel:
+        model = nn.DataParallel(model)
 
     scaler = None
     if config.fp16:
@@ -113,9 +115,9 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 _, feature = next(fv_iter)
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=bool(config.fp16)):
-                loss = model.mtl_forward(dataset= feature.dataset, input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                loss = model(dataset= feature.dataset, input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
                             sent_starts = feature.sent_starts.to(dev), sent_ends = feature.sent_ends.to(dev), labels=feature.label_id.to(dev),
-                             return_dict=True).loss
+                             return_dict=True).loss.sum()
             if config.fp16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -140,7 +142,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
             if total_perf > best_performance:
                 print(f"[Model Info] Saving the best model... with average performance {total_perf}..")
                 best_performance = total_perf
-                model.save_pretrained(f"model_files/{config.model_folder}")
+                model_to_save = model.module if hasattr(model, "module") else model
+                model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
     model = ScoringModel.from_pretrained(f"model_files/{config.model_folder}").to(dev)
@@ -158,7 +161,7 @@ def evaluate_four_variable(valid_dataloader: DataLoader, model: nn.Module, dev: 
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
-                logits = model.mtl_forward(dataset=feature.dataset, input_ids=feature.input_ids.to(dev),
+                logits = model(dataset=feature.dataset, input_ids=feature.input_ids.to(dev),
                                            attention_mask=feature.attention_mask.to(dev),
                                            sent_starts=feature.sent_starts.to(dev),
                                            sent_ends=feature.sent_ends.to(dev)).logits
@@ -185,10 +188,10 @@ def evaluate_four_variable(valid_dataloader: DataLoader, model: nn.Module, dev: 
             m0_corr += 1
             if pred_tuple[1] == gold_tuple[1]:
                 corr += 1
-    m0_acc = m0_corr * 1.0 / total * 100
-    acc = corr * 1.0 / total * 100
-    print(f"[Info]  m0_acc.:{m0_acc:.2f}, total acc: {acc:.2f} , total number: {total}", flush=True)
-    return acc
+    m0_acc = m0_corr * 1.0 / len(predictions) * 100
+    acc = corr * 1.0 / len(predictions) * 100
+    print(f"[Info]  m0_acc.:{m0_acc:.2f}, total acc: {acc:.2f} , total number: {len(predictions)}", flush=True)
+    return acc / 100
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device,
              fp16:bool, eval_answer: bool = False ,
@@ -200,7 +203,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device,
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
-                logits = model.mtl_forward(dataset=feature.dataset, input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                logits = model(dataset=feature.dataset, input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
                                sent_starts = feature.sent_starts.to(dev), sent_ends = feature.sent_ends.to(dev)).logits
             if use_binary:
                 # logits: batch_size, num_labels, 2
@@ -310,21 +313,23 @@ def main():
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), use_binary=opt.use_binary)
     else:
         print(f"Testing the model now.")
-        MODEL_NAME = ScoringModel if conf.use_binary else BertMathThreeVariables
-        model = MODEL_NAME.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
+        model = ScoringModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num,
                                   use_binary=opt.use_binary)
+        fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num)
         print("[Data Info] Loading validation data", flush=True)
-        valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers,
+        valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
+        fv_valid_dataloader = DataLoader(fv_eval_dataset, batch_size=conf.batch_size, shuffle=False,
+                                         num_workers=0, collate_fn=fv_eval_dataset.collate_function)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), eval_answer=False,
-                 result_file=res_file, err_file=err_file,
+                 # result_file=res_file, err_file=err_file,
                       idx2labels=idx2labels,
                       pretty_idx2labels=pretty_idx2labels)
-
+        evaluate_four_variable(fv_valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
 
 if __name__ == "__main__":
     main()

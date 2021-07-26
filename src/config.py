@@ -40,3 +40,5 @@ class Config:
 
         self.train_file = args.train_file
         self.dev_file = args.dev_file
+
+        self.parallel = args.parallel if "parallel" in args.__dict__ else 0
