@@ -179,7 +179,7 @@ def evaluate_four_variable(valid_dataloader: DataLoader, model: nn.Module, dev: 
                 logits = model(dataset=feature.dataset, input_ids=feature.input_ids.to(dev),
                                            attention_mask=feature.attention_mask.to(dev),
                                            sent_starts=feature.sent_starts.to(dev), m0_sent_starts=feature.m0_sent_starts.to(dev),
-                                           sent_ends=feature.sent_ends.to(dev), mo_sent_ends=feature.m0_sent_ends.to(dev), m0_operator_ids=feature.m0_operator_ids.to(dev)).logits
+                                           sent_ends=feature.sent_ends.to(dev), m0_sent_ends=feature.m0_sent_ends.to(dev), m0_operator_ids=feature.m0_operator_ids.to(dev)).logits
             logits = logits[:, :, :, 1] # batch_size, num_m0, 6 label scores
             temp_scores, temp_prediction = logits.max(dim=-1) # batch_size, num_m0 (the best label index for each m0)
             _, best_m0_idx = temp_scores.max(dim=-1) # batch_size
