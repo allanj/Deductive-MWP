@@ -5,9 +5,12 @@ from tqdm import tqdm
 from torch.utils.data._utils.collate import default_collate
 import numpy as np
 from src.utils import read_data
-from src.data.math_dataset import labels, Feature
+from src.data.math_dataset import labels
+import torch
+import collections
 
-
+FVFeature = collections.namedtuple('FVFeature', 'dataset input_ids attention_mask sent_starts sent_ends m0_sent_starts m0_sent_ends m0_operator_ids label_id')
+FVFeature.__new__.__defaults__ = (None,) * 5
 
 class FourVariableDataset(Dataset):
 
@@ -33,6 +36,8 @@ class FourVariableDataset(Dataset):
             all_variables_sorted = sorted(all_variables, key=lambda obj: obj["order_in_text"])
             v_name2idx = {var["var_name"]: idx for idx, var in enumerate(all_variables_sorted)}
             all_ids_diff_m0 = []
+            all_m0_sent_starts = []
+            all_m0_sent_ends = []
             all_sent_starts = []
             all_sent_ends = []
             all_attn_mask = []
@@ -40,6 +45,7 @@ class FourVariableDataset(Dataset):
             all_label_ids = []
             label_sum = 0
             assert len(all_generated_m0) == 18
+            m0_operator_ids = []
             for m0_idx, generated_m0_obj in enumerate(all_generated_m0):
                 all_strings = [var["concat_text"] for var in all_variables_sorted]
                 comb = generated_m0_obj["comb"]
@@ -52,6 +58,8 @@ class FourVariableDataset(Dataset):
                 if left_idx + right_idx <= all_var_names[0]:
                     m0_on_smaller = True
                 operator = generated_m0_obj["operator"].replace("x", "*")
+                m0_operator_id = labels.index(operator)
+                m0_operator_ids.append(m0_operator_id)
                 m0_cand = "v" + left_idx_str + operator + "v" + right_idx_str if not operator.endswith("_rev") else "v" + right_idx_str + operator[0] + "v" + left_idx_str
                 curr_m0_label_id = 0
                 if m0_cand == gold_m0:
@@ -101,11 +109,15 @@ class FourVariableDataset(Dataset):
                 res = tokenizer.batch_encode_plus(all_strings, return_attention_mask=False, add_special_tokens=False)
                 sent_starts = []
                 sent_ends = []
+                m0_sent_starts = []
+                m0_sent_ends = []
                 all_ids = [tokenizer.cls_token_id]
                 start = len(all_ids)
                 for k, ids in enumerate(res["input_ids"]):
-                    if k != right_most_idx+1 and (k == left_most_idx or k == right_most_idx):
-                        pass
+                    if k == right_most_idx+1 or (k == left_most_idx or k == right_most_idx):
+                        m0_sent_starts.append(start)
+                        m0_sent_ends.append(start + len(ids))
+                        # pass
                     else:
                         sent_starts.append(start)
                         sent_ends.append(start + len(ids))
@@ -116,26 +128,32 @@ class FourVariableDataset(Dataset):
                         all_ids.append(tokenizer.convert_tokens_to_ids(['？'])[0])
                     start = len(all_ids)
                 all_ids.append(tokenizer.sep_token_id)
-                assert len(sent_starts) == 3
+                assert len(sent_starts) == 2
+                assert len(m0_sent_starts) == 3
                 attn_mask = [1] * len(all_ids)
                 all_ids_diff_m0.append(all_ids)
                 all_sent_starts.append(sent_starts)
                 all_sent_ends.append(sent_ends)
+                all_m0_sent_starts.append(m0_sent_starts)
+                all_m0_sent_ends.append(m0_sent_ends)
                 all_attn_mask.append(attn_mask)
             assert label_sum == 1
-            self._features.append(Feature(dataset='4_var', input_ids=all_ids_diff_m0,
+            self._features.append(FVFeature(dataset='4_var', input_ids=all_ids_diff_m0,
                                           attention_mask=all_attn_mask,
                                           sent_starts=all_sent_starts,
                                           sent_ends=all_sent_ends,
+                                          m0_sent_starts=all_m0_sent_starts,
+                                         m0_sent_ends=all_m0_sent_ends,
+                                            m0_operator_ids=m0_operator_ids,
                                           label_id=all_label_ids))
 
     def __len__(self) -> int:
         return len(self._features)
 
-    def __getitem__(self, idx) -> Feature:
+    def __getitem__(self, idx) -> FVFeature:
         return self._features[idx]
 
-    def collate_function(self, batch: List[Feature]):
+    def collate_function(self, batch: List[FVFeature]):
         max_wordpiece_length = max([len(ids)  for feature in batch for ids in feature.input_ids])
         for i, feature in enumerate(batch):
             all_padded_ids = []
@@ -148,21 +166,26 @@ class FourVariableDataset(Dataset):
                 all_padded_attn_mask.append(padded_attn_mask)
             all_padded_ids = np.asarray(all_padded_ids)
             assert np.asarray(feature.label_id).sum()==1
-            batch[i] = Feature(dataset=feature.dataset, input_ids=all_padded_ids,
+            batch[i] = FVFeature(dataset=feature.dataset, input_ids=all_padded_ids,
                               attention_mask=np.asarray(all_padded_attn_mask),
-                              sent_starts=np.asarray(feature.sent_starts),
-                              sent_ends=np.asarray(feature.sent_ends),
+                                 sent_starts=np.asarray(feature.sent_starts),
+                                 sent_ends=np.asarray(feature.sent_ends),
+                                 m0_sent_starts=np.asarray(feature.m0_sent_starts),
+                                 m0_sent_ends=np.asarray(feature.m0_sent_ends),
+                                 m0_operator_ids =np.asarray(feature.m0_operator_ids),
                               label_id=np.asarray(feature.label_id))
-        results = Feature(*(default_collate(samples) for samples in zip(*batch)))
+        results = FVFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 
 
 if __name__ == '__main__':
     tokenizer = MBartTokenizerFast.from_pretrained('facebook/mbart-large-cc25')
-    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=-1)
-    # from torch.utils.data import DataLoader
-    #
-    # loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
-    # for batch in loader:
-    #     pass
-        # print(batch)
+    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=20)
+    from torch.utils.data import DataLoader
+
+    loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
+    for batch in loader:
+        print(batch.m0_operator_ids.size())
+        pass
+        exit(0)
+        print(batch)

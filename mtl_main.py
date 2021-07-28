@@ -108,16 +108,31 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         fv_iter = enumerate(fv_train_loader, 1)
         random.shuffle(orders)
         for iter, dataset_idx in tqdm(enumerate(orders, 1), desc="--training batch", total=total_num_batches):
-        # for iter, feature in tqdm(enumerate(train_dataloader, 1) , desc="--training batch", total=len(train_dataloader)):
+
             if dataset_idx == 0:
                 _, feature = next(three_var_iter)
+                args = {
+                    "dataset": feature.dataset, "input_ids": feature.input_ids.to(dev),
+                    "attention_mask": feature.attention_mask.to(dev),
+                    "sent_starts": feature.sent_starts.to(dev),
+                    "sent_ends": feature.sent_ends.to(dev),
+                    "labels": feature.label_id.to(dev),
+                    "return_dict": True
+                }
             else:
                 _, feature = next(fv_iter)
+                args = {
+                    "dataset": feature.dataset, "input_ids": feature.input_ids.to(dev),
+                    "attention_mask": feature.attention_mask.to(dev),
+                    "sent_starts": feature.sent_starts.to(dev), "m0_sent_starts": feature.m0_sent_starts.to(dev),
+                    "sent_ends": feature.sent_ends.to(dev),  "m0_sent_ends": feature.m0_sent_starts.to(dev),
+                    "m0_operator_ids": feature.m0_operator_ids.to(dev),
+                    "labels": feature.label_id.to(dev),
+                    "return_dict": True
+                }
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=bool(config.fp16)):
-                loss = model(dataset= feature.dataset, input_ids = feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                            sent_starts = feature.sent_starts.to(dev), sent_ends = feature.sent_ends.to(dev), labels=feature.label_id.to(dev),
-                             return_dict=True).loss.sum()
+                loss = model(**args).loss.sum()
             if config.fp16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -163,8 +178,8 @@ def evaluate_four_variable(valid_dataloader: DataLoader, model: nn.Module, dev: 
             with torch.cuda.amp.autocast(enabled=fp16):
                 logits = model(dataset=feature.dataset, input_ids=feature.input_ids.to(dev),
                                            attention_mask=feature.attention_mask.to(dev),
-                                           sent_starts=feature.sent_starts.to(dev),
-                                           sent_ends=feature.sent_ends.to(dev)).logits
+                                           sent_starts=feature.sent_starts.to(dev), m0_sent_starts=feature.m0_sent_starts.to(dev),
+                                           sent_ends=feature.sent_ends.to(dev), mo_sent_ends=feature.m0_sent_ends.to(dev), m0_operator_ids=feature.m0_operator_ids.to(dev)).logits
             logits = logits[:, :, :, 1] # batch_size, num_m0, 6 label scores
             temp_scores, temp_prediction = logits.max(dim=-1) # batch_size, num_m0 (the best label index for each m0)
             _, best_m0_idx = temp_scores.max(dim=-1) # batch_size

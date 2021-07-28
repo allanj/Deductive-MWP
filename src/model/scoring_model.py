@@ -18,7 +18,7 @@ class ScoringModel(BertPreTrainedModel):
         self.linears = nn.ModuleList()
         for i in range(self.num_labels):
             self.linears.append(nn.Sequential(
-                nn.Linear(2 * config.hidden_size, config.hidden_size),
+                nn.Linear(config.hidden_size, config.hidden_size),
                 nn.ReLU(),
                 nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
                 nn.Dropout(config.hidden_dropout_prob)
@@ -34,6 +34,9 @@ class ScoringModel(BertPreTrainedModel):
         token_type_ids=None,
         position_ids=None,
         sent_starts: torch.Tensor = None, sent_ends: torch.Tensor = None,
+        m0_sent_starts: torch.Tensor = None,
+        m0_sent_ends: torch.Tensor = None,
+        m0_operator_ids: torch.Tensor = None,
         head_mask=None,
         inputs_embeds=None,
         labels=None,
@@ -61,6 +64,9 @@ class ScoringModel(BertPreTrainedModel):
                                 position_ids=position_ids,
                                 sent_starts=sent_starts,
                                 sent_ends=sent_ends,
+                                m0_sent_starts=m0_sent_starts,
+                                m0_sent_ends=m0_sent_ends,
+                                m0_operator_ids=m0_operator_ids,
                                 head_mask=head_mask,
                                 inputs_embeds=inputs_embeds,
                                 labels=labels,
@@ -111,7 +117,8 @@ class ScoringModel(BertPreTrainedModel):
         sent_start_states = torch.gather(last_hidden_state, 1, sent_starts.unsqueeze(2).expand(batch_size, -1, hidden_size))
         sent_end_states = torch.gather(last_hidden_state, 1, sent_ends.unsqueeze(2).expand(batch_size, -1, hidden_size))
         ## batch_size, num_variables, hidden_size
-        sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
+        # sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
+        sent_states = sent_start_states + sent_end_states
         ## batch_size, hidden_size
         summed_states = sent_states.sum(dim=-2)
         ## batch_size, num_labels, hidden_size
@@ -142,6 +149,9 @@ class ScoringModel(BertPreTrainedModel):
         position_ids=None,
         sent_starts: torch.Tensor = None, ## batch_size x num_m0 x 3
         sent_ends: torch.Tensor = None,  ## batch_size x num_m0 x 3
+        m0_sent_starts: torch.Tensor = None,
+        m0_sent_ends: torch.Tensor = None,
+        m0_operator_ids: torch.Tensor = None,
         head_mask=None,
         inputs_embeds=None,
         labels=None, ## batch_size x num_m0
@@ -182,13 +192,29 @@ class ScoringModel(BertPreTrainedModel):
         last_hidden_state = last_hidden_state.view(batch_size, num_m0, last_hidden_state.size(-2), last_hidden_state.size(-1))
 
         batch_size, _, _, hidden_size = last_hidden_state.size()
+
+        m0_sent_start_states = torch.gather(last_hidden_state, 2,  m0_sent_starts.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
+        m0_sent_end_states = torch.gather(last_hidden_state, 2,  m0_sent_ends.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
+        # ## batch_size, num_m0, num_variables, hidden_size
+        # m0_sent_states = torch.cat([m0_sent_start_states, m0_sent_end_states], dim=-1)
+        m0_sent_states = m0_sent_start_states + m0_sent_end_states
+        ## batch_size, num_m0, hidden_size
+        m0_summed_states = m0_sent_states.sum(dim=-2)
+        ## batch_size, num_m0, num_labels, hidden_size
+        m0_label_rep = torch.stack([layer(m0_summed_states) for layer in self.linears], dim=2)
+        # m0_operator_ids: batch_size, num_m0
+        # m0_rep: batch_size, num_m0, hidden_size
+        m0_rep = torch.gather(m0_label_rep, 2, m0_operator_ids.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_m0, 1, hidden_size)).squeeze(2)
+
+
         sent_start_states = torch.gather(last_hidden_state, 2, sent_starts.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
         sent_end_states = torch.gather(last_hidden_state, 2, sent_ends.unsqueeze(3).expand(batch_size, num_m0, -1, hidden_size))
 
         # ## batch_size, num_m0, num_variables, hidden_size
-        sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
+        # sent_states = torch.cat([sent_start_states, sent_end_states], dim=-1)
+        sent_states = sent_start_states + sent_end_states
         ## batch_size, num_m0, hidden_size
-        summed_states = sent_states.sum(dim=-2)
+        summed_states = sent_states.sum(dim=-2) + m0_rep
 
         ## batch_size, num_m0, num_labels, hidden_size
         label_rep = torch.stack([layer(summed_states) for layer in self.linears], dim=2)
