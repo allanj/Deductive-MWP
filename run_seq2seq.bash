@@ -8,7 +8,7 @@ model_folder=generation
 
 
 
-## for generate m0
+## for generate m0, 1.0, 1.1, 1.2 are length penalty
 TOKENIZERS_PARALLELISM=false python3 -m preprocess.process_four_variables 1.0 ${model_folder} > logs/gen_1.0.log 2>&1
 TOKENIZERS_PARALLELISM=false python3 -m preprocess.process_four_variables 1.1 ${model_folder} > logs/gen_1.1.log 2>&1
 TOKENIZERS_PARALLELISM=false python3 -m preprocess.process_four_variables 1.2 ${model_folder} > logs/gen_1.2.log 2>&1

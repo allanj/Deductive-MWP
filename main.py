@@ -8,7 +8,6 @@ from src.utils import get_optimizers, write_data
 import torch
 import torch.nn as nn
 import numpy as np
-from sklearn.metrics import f1_score, classification_report
 import os
 import random
 from typing import List
