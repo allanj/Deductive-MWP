@@ -48,9 +48,9 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--bert_folder', type=str, default="hfl", help="The folder name that contains the BERT model")
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
-    # parser.add_argument('--bert_folder', type=str, default="", help="The folder name that contains the BERT model")
-    # parser.add_argument('--bert_model_name', type=str, default="bert-base-chinese",
-    #                     help="The bert model name to used")
+
+    ## data and model
+    parser.add_argument('--insert_m0_string', type=int, default=1, choices=[0,1], help="whether we insert the m0 string into the model")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -293,10 +293,10 @@ def main():
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
         dataset = QuestionDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, use_four_variables=opt.four_variables,
-                                  use_binary=opt.use_binary)
+                                  use_binary=opt.use_binary, use_ans_string=opt.insert_m0_string)
         print("[Data Info] Reading validation data", flush=True)
         eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, use_four_variables=opt.four_variables,
-                                  use_binary=opt.use_binary)
+                                  use_binary=opt.use_binary, use_ans_string=opt.insert_m0_string)
 
 
         # Prepare data loader
@@ -306,8 +306,8 @@ def main():
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
 
 
-        fv_train_dataset = FourVariableDataset(file=opt.fv_train_file, tokenizer=tokenizer, number=conf.train_num)
-        fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num)
+        fv_train_dataset = FourVariableDataset(file=opt.fv_train_file, tokenizer=tokenizer, number=conf.train_num, insert_m0_string=opt.insert_m0_string)
+        fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num, insert_m0_string=opt.insert_m0_string)
         print("[Data Info] Loading fv training data", flush=True)
         fv_train_dataloader = DataLoader(fv_train_dataset, batch_size=conf.batch_size, shuffle=conf.shuffle_train_data,
                                       num_workers=conf.num_workers, collate_fn=fv_train_dataset.collate_function)
@@ -331,8 +331,8 @@ def main():
         model = ScoringModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num,
-                                  use_binary=opt.use_binary)
-        fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num)
+                                  use_binary=opt.use_binary, use_ans_string=opt.insert_m0_string)
+        fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num, insert_m0_string=opt.insert_m0_string)
         print("[Data Info] Loading validation data", flush=True)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)

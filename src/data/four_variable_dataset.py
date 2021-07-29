@@ -17,7 +17,8 @@ class FourVariableDataset(Dataset):
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
                  number: int = -1,
-                 test_strings:List[str] = None) -> None:
+                 test_strings:List[str] = None,
+                 insert_m0_string: bool = True) -> None:
         self.tokenizer = tokenizer
         data = read_data(file=file)
         if number > 0:
@@ -103,9 +104,14 @@ class FourVariableDataset(Dataset):
                 right_var = v_name2variables["v" + right_idx_str]
                 right_most_idx = v_name2idx["v" + right_idx_str]
                 left_most_idx = v_name2idx["v" + left_idx_str]
+                ans_string_idx = v_name2idx["x"]
                 assert right_most_idx > left_most_idx
-                all_strings.insert(right_most_idx+1, gen_m0_string)
-                assert len(all_strings) == 5
+                if insert_m0_string:
+                    all_strings.insert(right_most_idx+1, gen_m0_string)
+                    ans_string_idx = ans_string_idx if ans_string_idx <= right_most_idx else ans_string_idx + 1
+                    assert len(all_strings) == 5
+                else:
+                    assert len(all_strings) == 4
                 res = tokenizer.batch_encode_plus(all_strings, return_attention_mask=False, add_special_tokens=False)
                 sent_starts = []
                 sent_ends = []
@@ -114,13 +120,16 @@ class FourVariableDataset(Dataset):
                 all_ids = [tokenizer.cls_token_id]
                 start = len(all_ids)
                 for k, ids in enumerate(res["input_ids"]):
-                    if k == right_most_idx+1 or (k == left_most_idx or k == right_most_idx):
+                    if (k == right_most_idx+1 and insert_m0_string) or (k == left_most_idx or k == right_most_idx):
                         m0_sent_starts.append(start)
                         m0_sent_ends.append(start + len(ids))
                         # pass
                     else:
-                        sent_starts.append(start)
-                        sent_ends.append(start + len(ids))
+                        if not insert_m0_string and k == ans_string_idx:
+                            pass
+                        else:
+                            sent_starts.append(start)
+                            sent_ends.append(start + len(ids))
                     all_ids.extend(ids)
                     if k != len(res["input_ids"]) - 1:
                         all_ids.append(tokenizer.convert_tokens_to_ids(['，'])[0])
@@ -128,8 +137,12 @@ class FourVariableDataset(Dataset):
                         all_ids.append(tokenizer.convert_tokens_to_ids(['？'])[0])
                     start = len(all_ids)
                 all_ids.append(tokenizer.sep_token_id)
-                assert len(sent_starts) == 2
-                assert len(m0_sent_starts) == 3
+                if insert_m0_string:
+                    assert len(sent_starts) == 2
+                    assert len(m0_sent_starts) == 3
+                else:
+                    assert len(sent_starts) == 1
+                    assert len(m0_sent_starts) == 2
                 attn_mask = [1] * len(all_ids)
                 all_ids_diff_m0.append(all_ids)
                 all_sent_starts.append(sent_starts)
@@ -180,7 +193,7 @@ class FourVariableDataset(Dataset):
 
 if __name__ == '__main__':
     tokenizer = MBartTokenizerFast.from_pretrained('facebook/mbart-large-cc25')
-    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=20)
+    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=20,insert_m0_string=False)
     from torch.utils.data import DataLoader
 
     loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)

@@ -118,9 +118,9 @@ def load_generation_model(model_folder:str, device:torch.device):
 
 if __name__ == '__main__':
     device = torch.device('cuda:0')
-    data = read_data(file="data/four_var_cases.json")
+    data = read_data(file="data/four_var_cases_updated.json")
     repetition_penalty = float(sys.argv[1]) #1.1
-    output_file = f"data/all_generated_{repetition_penalty}.json"
+    output_file = f"data/all_generated_{repetition_penalty}_updated.json"
     model_folder = sys.argv[2]#"generation"
     model, tokenizer = load_generation_model(model_folder=model_folder, device=device)
     res = generate_description(model=model, tokenizer=tokenizer, data = data, repetition_penalty = repetition_penalty)

@@ -78,7 +78,8 @@ class QuestionDataset(Dataset):
                  number: int = -1,
                  use_four_variables: bool = True,
                  test_strings:List[str] = None,
-                 use_binary: bool  =False) -> None:
+                 use_binary: bool  =False,
+                 use_ans_string: bool = True) -> None:
         self.tokenizer = tokenizer
         self.use_binary = use_binary
         if test_strings:
@@ -166,14 +167,25 @@ class QuestionDataset(Dataset):
                 all_ids = [tokenizer.cls_token_id]
                 start = len(all_ids)
                 for k, ids in enumerate(id_lists):
-                    sent_starts.append(start)
-                    sent_ends.append(start + len(ids))
+                    if not use_ans_string and k == ans_idx:
+                        assert inst["variables"][k][0] == "x"
+                        pass
+                    else:
+                        sent_starts.append(start)
+                        sent_ends.append(start + len(ids))
                     all_ids.extend(ids)
                     if k != len(id_lists) - 1:
                         all_ids.append(tokenizer.convert_tokens_to_ids(['，'])[0])
                     else:
                         all_ids.append(tokenizer.convert_tokens_to_ids(['？'])[0])
                     start = len(all_ids)
+                if use_ans_string:
+                    if use_four_variables:
+                        assert len(sent_starts) == 4
+                    else:
+                        assert len(sent_starts) == 3
+                else:
+                    assert len(sent_starts) == 2
                 all_ids.append(tokenizer.sep_token_id)
                 attn_mask = [1]*len(all_ids)
                 # label_id = -1
@@ -239,14 +251,12 @@ class QuestionDataset(Dataset):
 
 
 if __name__ == '__main__':
-    # tokenizer = RobertaTokenizerFast.from_pretrained('hfl/chinese-roberta-wwm-ext')
-    # dataset = QuestionDataset(file='../../data/simple_cases.json', tokenizer=tokenizer, number=-1)
-    # from torch.utils.data import DataLoader
-    #
-    # loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
-    # for batch in loader:
-    #     pass
-    #     # print(batch)
+    tokenizer = RobertaTokenizerFast.from_pretrained('hfl/chinese-roberta-wwm-ext')
+    dataset = QuestionDataset(file='../../data/simple_cases.json', tokenizer=tokenizer, number=30, use_four_variables=False, use_ans_string=False)
+    from torch.utils.data import DataLoader
 
-    numbers = re.findall(r"\d+", "我们班有100个人")
-    print(numbers)
+    loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
+    for batch in loader:
+        pass
+        exit(0)
+        # print(batch)
