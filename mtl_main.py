@@ -38,8 +38,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--train_file', type=str, default="data/simple_cases_train_all.json")
     parser.add_argument('--dev_file', type=str, default="data/simple_cases_test_all.json")
-    parser.add_argument('--fv_train_file', type=str, default="data/fv_train.json")
-    parser.add_argument('--fv_dev_file', type=str, default="data/fv_test.json")
+    parser.add_argument('--fv_train_file', type=str, default="data/fv_train_updated.json")
+    parser.add_argument('--fv_dev_file', type=str, default="data/fv_test_updated.json")
 
     parser.add_argument('--four_variables', type=int, default=0, choices=[0, 1], help="random seed")
     # model

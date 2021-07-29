@@ -51,6 +51,9 @@ class FourVariableDataset(Dataset):
                 all_strings = [var["concat_text"] for var in all_variables_sorted]
                 comb = generated_m0_obj["comb"]
                 left_idx_str, right_idx_str = comb.split(" ")
+                if left_idx_str.startswith("v"):
+                    left_idx_str = left_idx_str[-1:]
+                    right_idx_str = right_idx_str[-1:]
                 all_var_names = [1, 2, 3]
                 left_idx, right_idx = int(left_idx_str), int(right_idx_str)
                 all_var_names.remove(left_idx)
@@ -193,7 +196,7 @@ class FourVariableDataset(Dataset):
 
 if __name__ == '__main__':
     tokenizer = MBartTokenizerFast.from_pretrained('facebook/mbart-large-cc25')
-    dataset = FourVariableDataset(file='../../data/all_generated_1.0.json', tokenizer=tokenizer, number=20,insert_m0_string=False)
+    dataset = FourVariableDataset(file='../../data/all_generated_1.0_updated.json', tokenizer=tokenizer, number=20,insert_m0_string=False)
     from torch.utils.data import DataLoader
 
     loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)
