@@ -122,7 +122,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                     "dataset": feature.dataset, "input_ids": feature.input_ids.to(dev),
                     "attention_mask": feature.attention_mask.to(dev),
                     "sent_starts": feature.sent_starts.to(dev), "m0_sent_starts": feature.m0_sent_starts.to(dev),
-                    "sent_ends": feature.sent_ends.to(dev),  "m0_sent_ends": feature.m0_sent_starts.to(dev),
+                    "sent_ends": feature.sent_ends.to(dev),  "m0_sent_ends": feature.m0_sent_ends.to(dev),
                     "m0_operator_ids": feature.m0_operator_ids.to(dev),
                     "labels": feature.label_id.to(dev),
                     "return_dict": True
