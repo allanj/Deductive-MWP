@@ -98,9 +98,22 @@ def check_4_variables():
     write_data(file="data/fv_test_updated.json", data=test_data)
 
 
+def split_complext():
+    import random
+    random.seed(42)
+    file = "data/complex/mwp_processed.json"
+    data = read_data(file=file)
+    random.shuffle(data)
+    train_num = int(len(data) * 0.9)
+    train_data = data[:train_num]
+    test_data = data[train_num:]
+    write_data(file="data/complex/train.json", data=train_data)
+    write_data(file="data/complex/validation.json", data=test_data)
+
 
 if __name__ == '__main__':
     # count_num_operations("data/cate_res_comp.txt")
     # check_json_data(file="data/simple_cases.json")
     # split_generation()
-    check_4_variables()
+    # check_4_variables()
+    split_complext()
