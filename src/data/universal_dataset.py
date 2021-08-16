@@ -41,12 +41,15 @@ class UniversalDataset(Dataset):
             if len(re.findall(pattern, mapped_equation)) > 0:
                 mapped_equation = mapped_equation.replace("( ( ", "( ").replace(") ) ", ") ")
             ### end equation preprocess
-            mapped_text = obj["mapped_text"].split()
+            mapped_text = obj["mapped_text"]
+            for k in range(ord('a'), ord('a') + 26):
+                mapped_text = mapped_text.replace(f"@ {chr(k)}", " <quant> ")
+            mapped_text = mapped_text.split()
             input_text = ""
-            for word in mapped_text:
-                if word.startswith("temp_"):
+            for idx, word in enumerate(mapped_text):
+                if word.strip() == "<quant>":
                     input_text += " <quant> "
-                elif word == ",":
+                elif word == "," or word == "，":
                     input_text += word + " "
                 else:
                     input_text += word
@@ -59,10 +62,10 @@ class UniversalDataset(Dataset):
             for k, token in enumerate(tokens):
                 if token == "<" and tokens[k:] == ['<', 'q', '##uan', '##t', '>']:
                     var_starts.append(k)
-                    var_ends.append(k+5)
+                    var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
-            labels = self.get_label_ids(mapped_equation)
+            labels = self.get_label_ids(obj["equation_layer"])
             self._features.append(
                 UniFeature(input_ids=input_ids,
                            attention_mask=attention_mask,
@@ -82,40 +85,16 @@ class UniversalDataset(Dataset):
 
 
 
-    def get_label_ids(self, mapped_equation) -> Union[List[List[int]], None]:
+    def get_label_ids(self, equation_layers: List) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
-        assert len(mapped_equation) - len(mapped_equation.replace("(", "")) <= 1
-        assert mapped_equation.startswith("x=")
-        mapped_equation = ' '.join(mapped_equation[2:].split(' '))
-        all_labels = []
-        if  len(mapped_equation) - len(mapped_equation.replace("(", "")) == 1:
-            var_and_ops = mapped_equation.split(" ")
-            left_bracket_index = var_and_ops.index("(")
-            right_bracket_index = var_and_ops.index(")")
-            ## height = 0
-            op = var_and_ops[left_bracket_index + 2]
-            left_var_index = ord(var_and_ops[left_bracket_index + 2 - 1][-1]) - ord('a')
-            right_var_index = ord(var_and_ops[left_bracket_index + 2 + 1][-1]) - ord('a')
-            actual_op_id = uni_labels.index(op) if left_var_index < right_var_index else uni_labels.index(op + "_rev")
-            labels = [left_var_index, right_var_index, actual_op_id]
-            all_labels.append(labels)
-            if left_bracket_index != 0
-
-        else:
-            var_and_ops = mapped_equation.split(" ")
-            h = 0
-            for i in range(1, len(var_and_ops), 2):
-                op = var_and_ops[i]
-                assert op in ["+", "-", "*", "/"]
-                left_var_index = ord(var_and_ops[i-1][-1]) - ord('a')if i == 1 else -1
-                right_var_index = ord(var_and_ops[i+1][-1]) - ord('a')
-                if left_var_index == right_var_index:
-                    return None
-                actual_op_id = uni_labels.index(op) if left_var_index < right_var_index else uni_labels.index(op + "_rev")
-                labels = [left_var_index, right_var_index, actual_op_id]
-                all_labels.append(labels)
-                h += 1
-        return all_labels
+        label_ids = []
+        for layer in equation_layers:
+            left_var, right_var, op = layer
+            left_var_idx = ord(left_var) - ord('a') if left_var != "#" else -1
+            right_var_idx = ord(right_var) - ord('a')
+            op_idx = uni_labels.index(op)
+            label_ids.append([left_var_idx, right_var_idx, op_idx])
+        return label_ids
 
 
 
@@ -129,26 +108,29 @@ class UniversalDataset(Dataset):
         """
 
 
-        max_wordpiece_length = max([len(ids)  for feature in batch for ids in feature.input_ids])
+        max_wordpiece_length = max([len(feature.input_ids)  for feature in batch])
+        max_num_variable = max([feature.num_variables  for feature in batch])
+        max_height = max([len(feature.labels) for feature in batch])
         for i, feature in enumerate(batch):
-            all_padded_ids = []
-            all_padded_attn_mask = []
-            for ids,attn_mask in zip(feature.input_ids, feature.attention_mask):
-                padding_length = max_wordpiece_length - len(ids)
-                padded_ids = ids + [self.tokenizer.pad_token_id] * padding_length
-                padded_attn_mask = attn_mask + [0] * padding_length
-                all_padded_ids.append(padded_ids)
-                all_padded_attn_mask.append(padded_attn_mask)
-            all_padded_ids = np.asarray(all_padded_ids)
-            assert np.asarray(feature.label_id).sum()==1
-            batch[i] = UniFeature(dataset=feature.dataset, input_ids=all_padded_ids,
-                              attention_mask=np.asarray(all_padded_attn_mask),
-                                 sent_starts=np.asarray(feature.sent_starts),
-                                 sent_ends=np.asarray(feature.sent_ends),
-                                 m0_sent_starts=np.asarray(feature.m0_sent_starts),
-                                 m0_sent_ends=np.asarray(feature.m0_sent_ends),
-                                 m0_operator_ids =np.asarray(feature.m0_operator_ids),
-                              label_id=np.asarray(feature.label_id))
+            padding_length = max_wordpiece_length - len(feature.input_ids)
+            input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
+            attn_mask = feature.attention_mask = [0]* padding_length
+
+            padded_variable_idx_len = max_num_variable - feature.num_variables
+            var_starts = feature.variable_indexs_start + [0] * padded_variable_idx_len
+            var_ends = feature.variable_indexs_end + [0] * padded_variable_idx_len
+            variable_index_mask = feature.variable_index_mask + [0] * padded_variable_idx_len
+
+            padded_height = max_height - len(feature.labels)
+            labels = feature.labels + [[-1, max_num_variable, 0]]* padded_height
+
+            batch[i] = UniFeature(input_ids=np.asarray(input_ids),
+                              attention_mask=np.asarray(attn_mask),
+                                 variable_indexs_start=np.asarray(var_starts),
+                                 variable_indexs_end=np.asarray(var_ends),
+                                 num_variables=np.asarray(feature.num_variables),
+                                 variable_index_mask=np.asarray(variable_index_mask),
+                                 labels =np.asarray(labels))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 
