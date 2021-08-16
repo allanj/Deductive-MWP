@@ -23,18 +23,53 @@ class Seq2SeqDataset(Dataset):
                  tokenizer: PreTrainedTokenizerFast,
                  number: int = -1) -> None:
         self.tokenizer = tokenizer
+        if "math23k" in file:
+            self.read_math23k(file, tokenizer, number)
+        else:
+            data = read_data(file=file)
+            if number > 0:
+                data = data[:number]
+            # ## tokenization
+            self._features = []
+            for obj in tqdm(data, desc='Tokenization', total=len(data)):
+                if not (obj['legal'] and obj['num_steps'] <= 2):
+                    continue
+                assert obj["posted_equation"].startswith("x =")
+                post_equation = obj["posted_equation"].replace("x =", "").strip().replace("temp_", "")
+                post_equation = ' '.join(post_equation.split())
+                words = obj["mapped_text"].split()
+                input_text = ""
+                for word in words:
+                    if word.startswith("temp_"):
+                        input_text += word[-1:]
+                    elif word == ",":
+                        input_text += word + " "
+                    else:
+                        input_text += word
+                res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
+                input_ids = res["input_ids"]
+                attention_mask = res["attention_mask"]
+
+                label_ids = tokenizer.encode_plus(post_equation, add_special_tokens=True, return_attention_mask=False)["input_ids"]
+                self._features.append(Feature(input_ids=input_ids,
+                                              attention_mask=attention_mask,
+                                              labels= label_ids))
+            print(f"length of data: {len(self._features)}")
+
+    def read_math23k(self, file: Union[str, None],
+                 tokenizer: PreTrainedTokenizerFast,
+                 number: int = -1) -> None:
         data = read_data(file=file)
         if number > 0:
             data = data[:number]
         # ## tokenization
         self._features = []
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
-            if not (obj['legal'] and obj['num_steps'] <= 2):
-                continue
-            assert obj["posted_equation"].startswith("x =")
-            post_equation = obj["posted_equation"].replace("x =", "").strip().replace("temp_", "")
+            target_template = ' '.join(obj["target_norm_post_template"])
+            assert target_template.startswith("x =")
+            post_equation = target_template.replace("x =", "").strip().replace("temp_", "")
             post_equation = ' '.join(post_equation.split())
-            words = obj["mapped_text"].split()
+            words = obj["text"].split()
             input_text = ""
             for word in words:
                 if word.startswith("temp_"):
@@ -46,10 +81,12 @@ class Seq2SeqDataset(Dataset):
             res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
             input_ids = res["input_ids"]
             attention_mask = res["attention_mask"]
-            label_ids = tokenizer.encode_plus(post_equation, add_special_tokens=True, return_attention_mask=False)["input_ids"]
+
+            label_ids = tokenizer.encode_plus(post_equation, add_special_tokens=True, return_attention_mask=False)[
+                "input_ids"]
             self._features.append(Feature(input_ids=input_ids,
                                           attention_mask=attention_mask,
-                                          labels= label_ids))
+                                          labels=label_ids))
         print(f"length of data: {len(self._features)}")
 
     def __len__(self) -> int:
@@ -73,7 +110,7 @@ class Seq2SeqDataset(Dataset):
 
 if __name__ == '__main__':
     tokenizer = MBartTokenizerFast.from_pretrained('facebook/mbart-large-cc25')
-    dataset = Seq2SeqDataset(file='../../data/complex/train.json', tokenizer=tokenizer, number=10000)
+    dataset = Seq2SeqDataset(file='../../data/math23k/train23k_processed.json', tokenizer=tokenizer, number=100)
     from torch.utils.data import DataLoader
 
     loader = DataLoader(dataset, batch_size=3,shuffle=True,collate_fn=dataset.collate_function)

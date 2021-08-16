@@ -42,3 +42,6 @@ class Config:
         self.dev_file = args.dev_file
 
         self.parallel = args.parallel if "parallel" in args.__dict__ else 0
+
+
+        self.decoder_from_scratch = args.decoder_from_scratch if "decoder_from_scratch" in args.__dict__ else 0

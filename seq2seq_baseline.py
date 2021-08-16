@@ -1,9 +1,9 @@
 from src.data.seq2seq_dataset import Seq2SeqDataset
 from src.config import Config
 from torch.utils.data import DataLoader
-from transformers import MBartTokenizerFast, PreTrainedTokenizer
+from transformers import MBartTokenizerFast, PreTrainedTokenizer, MBartConfig
 from tqdm import tqdm
-from transformers import MBartForConditionalGeneration
+from transformers import MBartForConditionalGeneration, MBartModel, AutoModelForSeq2SeqLM, AutoModel
 import argparse
 from src.utils import get_optimizers, read_data, write_data
 import torch
@@ -57,6 +57,8 @@ def parse_arguments(parser: argparse.ArgumentParser):
 
     parser.add_argument('--fp16', type=int, default=0, choices=[0,1], help="fp16")
 
+    parser.add_argument('--decoder_from_scratch', type=int, default=0, choices=[0, 1], help="train decoder_from_scratch")
+
     args = parser.parse_args()
     # Print out the arguments
     for k in args.__dict__:
@@ -71,7 +73,13 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
-    model = MBartForConditionalGeneration.from_pretrained(bert_model_name)
+    model:MBartForConditionalGeneration = MBartForConditionalGeneration.from_pretrained(bert_model_name)
+
+    if config.decoder_from_scratch:
+        print("[Info] train decoder from scratch")
+        random_model:AutoModel = AutoModel.from_config(MBartConfig.from_pretrained(bert_model_name))
+        model.model.decoder.load_state_dict(random_model.decoder.state_dict())
+
     model.to(dev)
     if config.fp16:
         scaler = torch.cuda.amp.GradScaler(enabled=bool(config.fp16))
