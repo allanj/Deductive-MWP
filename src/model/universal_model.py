@@ -193,6 +193,9 @@ def test_case_batch_two():
             ],
             [
                 -1, 3, 0 ## 3 means, for this one, we directly forward
+            ],
+            [
+                -1, 3, 0 ## 3 means, for this one, we directly forward
             ]
         ],
         [
@@ -201,6 +204,9 @@ def test_case_batch_two():
             ],
             [
                 -1, 2, uni_labels.index('+')
+            ],
+            [
+                -1, 3, 0 ## 3 means, for this one, we directly forward
             ]
         ]
     ])
