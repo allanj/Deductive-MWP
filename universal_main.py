@@ -11,6 +11,7 @@ import numpy as np
 import os
 import random
 from src.model.universal_model import UniversalModel
+from collections import Counter
 
 
 def set_seed(args):
@@ -146,7 +147,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev),
-                             return_dict=True, is_eval=False).all_logits
+                             return_dict=True, is_eval=True).all_logits
                 batch_size, max_num_variable = feature.variable_indexs_start.size()
                 num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
                 combination = torch.combinations(num_var_range, r=2, with_replacement=False)  ##number_of_combinations x 2
@@ -191,7 +192,10 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                 predictions.extend(batched_prediction)
                 labels.extend(batched_labels)
     corr = 0
+    num_label_step_corr = Counter()
+    num_label_step_total = Counter()
     for inst_predictions, inst_labels in zip(predictions, labels):
+        num_label_step_total[len(inst_labels)] += 1
         if len(inst_predictions) != len(inst_labels):
             continue
         is_correct = True
@@ -200,10 +204,15 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                 is_correct = False
                 break
         if is_correct:
+            num_label_step_corr[len(inst_labels)] += 1
             corr += 1
     total = len(labels)
     acc = corr*1.0/total
     print(f"[Info] Acc.:{acc*100:.2f} ", flush=True)
+    for key in num_label_step_total:
+        curr_corr = num_label_step_corr[key]
+        curr_total = num_label_step_total[key]
+        print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total})", flush=True)
     return acc
 
 def main():
