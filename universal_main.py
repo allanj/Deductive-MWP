@@ -98,7 +98,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev),
-                             return_dict=True)
+                             return_dict=True).loss
             if config.fp16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -116,16 +116,14 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
             if iter % 1000 == 0:
                 print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
-        # if valid_dataloader is not None:
-        #     performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), idx2labels=idx2labels, pretty_idx2labels=pretty_idx2labels, use_binary=config.use_binary)
-        #     fv_perf = evaluate_four_variable(fv_valid_loader, model, dev, fp16=bool(config.fp16))
-        #     total_perf = (performance + fv_perf) / 2
-        #     if total_perf > best_performance:
-        #         print(f"[Model Info] Saving the best model... with average performance {total_perf}..")
-        #         best_performance = total_perf
-        #         model_to_save = model.module if hasattr(model, "module") else model
-        #         model_to_save.save_pretrained(f"model_files/{config.model_folder}")
-        #         tokenizer.save_pretrained(f"model_files/{config.model_folder}")
+        if valid_dataloader is not None:
+            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16))
+            if performance > best_performance:
+                print(f"[Model Info] Saving the best model... with performance {performance}..")
+                best_performance = performance
+                model_to_save = model.module if hasattr(model, "module") else model
+                model_to_save.save_pretrained(f"model_files/{config.model_folder}")
+                tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
     model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}").to(dev)
     if config.fp16:
@@ -134,6 +132,79 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     return model
 
+def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool) -> float:
+    model.eval()
+    predictions = []
+    labels = []
+    with torch.no_grad():
+        for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
+            with torch.cuda.amp.autocast(enabled=fp16):
+                all_logits = model(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                             token_type_ids=feature.token_type_ids.to(dev),
+                             variable_indexs_start=feature.variable_indexs_start.to(dev),
+                             variable_indexs_end=feature.variable_indexs_end.to(dev),
+                             num_variables = feature.num_variables.to(dev),
+                             variable_index_mask= feature.variable_index_mask.to(dev),
+                             labels=feature.labels.to(dev),
+                             return_dict=True, is_eval=False).all_logits
+                batch_size, max_num_variable = feature.variable_indexs_start.size()
+                num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
+                combination = torch.combinations(num_var_range, r=2, with_replacement=False)  ##number_of_combinations x 2
+                num_combinations, _ = combination.size()
+                batched_prediction = [[] for _ in range(batch_size)]
+                for k, logits in enumerate(all_logits):
+                    best_temp_score, best_temp_label = logits.max(dim=-1)  ## batch_size, num_combinations
+                    best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
+                    best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
+                    if k == 0:
+                        # batch_size x 2
+                        best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
+                                     best_comb.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, 2).to(feature.variable_indexs_start.device)).squeeze(1)
+                    else:
+                        # batch_size
+                        best_comb_var_idxs = best_comb
+                    best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
+                    best_labels = best_label.cpu().numpy()
+                    for b_idx, (best_comb_idx, best_label) in enumerate(zip(best_comb_var_idxs, best_labels)): ## within each instances:
+                        if isinstance(best_comb_idx, np.int64):
+                            right = best_comb_idx
+                            left = -1
+                        else:
+                            left, right = best_comb_idx
+                        curr_label = [left, right, best_label]
+                        batched_prediction[b_idx].append(curr_label)
+                ## post process remve extra
+                for b, inst_predictions in enumerate(batched_prediction):
+                    for p, prediction_step in enumerate(inst_predictions):
+                        left, right, op_id = prediction_step
+                        if right == max_num_variable:
+                            batched_prediction[b] = batched_prediction[b][:p]
+                            break
+                batched_labels = feature.labels.cpu().numpy().tolist()
+                for b, inst_labels in enumerate(batched_labels):
+                    for p, label_step in enumerate(inst_labels):
+                        left, right, op_id = label_step
+                        if right == max_num_variable:
+                            batched_labels[b] = batched_labels[b][:p]
+                            break
+
+                predictions.extend(batched_prediction)
+                labels.extend(batched_labels)
+    corr = 0
+    for inst_predictions, inst_labels in zip(predictions, labels):
+        if len(inst_predictions) != len(inst_labels):
+            continue
+        is_correct = True
+        for prediction_step, label_step in zip(inst_predictions, inst_labels):
+            if prediction_step != label_step:
+                is_correct = False
+                break
+        if is_correct:
+            corr += 1
+    total = len(labels)
+    acc = corr*1.0/total
+    print(f"[Info] Acc.:{acc*100:.2f} ", flush=True)
+    return acc
 
 def main():
     parser = argparse.ArgumentParser(description="classificaton")
@@ -169,26 +240,17 @@ def main():
                       bert_model_name= bert_model_name,
                       valid_dataloader= valid_dataloader,
                       dev=conf.device, tokenizer=tokenizer, num_labels=num_labels)
-        # evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), use_binary=opt.use_binary)
-    # else:
-        # print(f"Testing the model now.")
-        # model = ScoringModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
-        # print("[Data Info] Reading test data", flush=True)
-        # eval_dataset = QuestionDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num,
-        #                           use_binary=opt.use_binary, use_ans_string=opt.insert_m0_string)
-        # fv_eval_dataset = FourVariableDataset(file=opt.fv_dev_file, tokenizer=tokenizer, number=conf.dev_num, insert_m0_string=opt.insert_m0_string)
-        # print("[Data Info] Loading validation data", flush=True)
-        # valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
-        #                               collate_fn=eval_dataset.collate_function)
-        # fv_valid_dataloader = DataLoader(fv_eval_dataset, batch_size=conf.batch_size, shuffle=False,
-        #                                  num_workers=0, collate_fn=fv_eval_dataset.collate_function)
-        # res_file= f"results/{conf.model_folder}.res.json"
-        # err_file = f"results/{conf.model_folder}.err.json"
-        # evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), eval_answer=False,
-        #          # result_file=res_file, err_file=err_file,
-        #               idx2labels=idx2labels,
-        #               pretty_idx2labels=pretty_idx2labels)
-        # evaluate_four_variable(fv_valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
+    else:
+        print(f"Testing the model now.")
+        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
+        print("[Data Info] Reading test data", flush=True)
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num)
+        valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
+                                      collate_fn=eval_dataset.collate_function)
+        res_file= f"results/{conf.model_folder}.res.json"
+        err_file = f"results/{conf.model_folder}.err.json"
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
 
 if __name__ == "__main__":
     main()

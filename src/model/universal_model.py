@@ -4,8 +4,25 @@ import torch
 import torch.utils.checkpoint
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_outputs import (
-    SequenceClassifierOutput,
+    ModelOutput,
 )
+from dataclasses import dataclass
+from typing import Optional, List
+
+@dataclass
+class UniversalOutput(ModelOutput):
+    """
+    Base class for outputs of sentence classification models.
+
+    Args:
+        loss (:obj:`torch.FloatTensor` of shape :obj:`(1,)`, `optional`, returned when :obj:`labels` is provided):
+            Classification (or regression if config.num_labels==1) loss.
+        logits (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, config.num_labels)`):
+            Classification (or regression if config.num_labels==1) scores (before SoftMax).
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    all_logits: List[torch.FloatTensor] = None
 
 def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch.Tensor):
     """
@@ -43,7 +60,7 @@ class UniversalModel(BertPreTrainedModel):
             ))
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
-        self.max_height = 3 ## 3 operation
+        self.max_height = 4 ## 3 operation
         self.init_weights()
 
 
@@ -63,6 +80,7 @@ class UniversalModel(BertPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        is_eval=False
     ):
         r"""
                 labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
@@ -83,7 +101,7 @@ class UniversalModel(BertPreTrainedModel):
             return_dict=return_dict,
         )
         batch_size, sent_len, hidden_size = outputs.last_hidden_state.size()
-        if labels is not None:
+        if labels is not None and not is_eval:
             # is_train
             _, max_height, _ = labels.size()
         else:
@@ -96,6 +114,7 @@ class UniversalModel(BertPreTrainedModel):
         var_hidden_states = var_start_hidden_states + var_end_hidden_states
         best_mi_label_rep = None
         loss = 0
+        all_logits = []
         for i in range(max_height):
             if i == 0:
                 ## max_num_variable = 4. -> [0,1,2,3]
@@ -115,7 +134,7 @@ class UniversalModel(BertPreTrainedModel):
                 ## batch_size, num_combinations/num_m0, num_labels
                 m0_logits = self.label_rep2label(m0_label_rep).squeeze(-1)
                 m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels).log()
-
+                all_logits.append(m0_logits)
                 best_temp_score, best_temp_label = m0_logits.max(dim=-1) ## batch_size, num_combinations
                 best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
                 best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
@@ -124,7 +143,7 @@ class UniversalModel(BertPreTrainedModel):
                 # best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
                 # best_mi_label_rep = best_m0_label_rep
                 ## NOTE: add loosss
-                if labels is not None:
+                if labels is not None and not is_eval:
                     m0_gold_labels = labels[:, i, :] ## batch_size x 3 (left_var_index, right_var_index, label_index)
                     m0_gold_comb = m0_gold_labels[:, :2].unsqueeze(1).expand(batch_size, num_combinations, 2)
                     batched_comb = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
@@ -136,6 +155,9 @@ class UniversalModel(BertPreTrainedModel):
                     loss = loss +  (best_m0_score - m0_gold_scores).sum()
 
                     best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, -1]] ## teacher-forcing.
+                else:
+                    best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
+                    best_mi_label_rep = best_m0_label_rep
             else:
                 mi_sum_states = var_hidden_states + best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable, hidden_size)
                 ## batch_size, max_num_variable, num_labels, hidden_size
@@ -149,7 +171,7 @@ class UniversalModel(BertPreTrainedModel):
                 subpart_mi_logits = mi_logits[:, :-1, :] + variable_index_mask.unsqueeze(-1).expand(batch_size, max_num_variable, self.num_labels).log()
 
                 mi_logits = torch.cat([subpart_mi_logits, mi_logits[:, -1:, :]], dim=1) #batch_size, max_num_variable  + 1, self.num_labels
-
+                all_logits.append(mi_logits)
                 best_temp_score, best_temp_label = mi_logits.max(dim=-1)  ## batch_size, max_num_variable
                 best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                 best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
@@ -157,13 +179,15 @@ class UniversalModel(BertPreTrainedModel):
                 b_idxs = [k for k in range(batch_size)]
                 # best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 ## NOTE: add loss
-                if labels is not None:
+                if labels is not None and not is_eval:
                     mi_gold_labels = labels[:, i, -2:]  ## batch_size x 2
                     mi_gold_scores = mi_logits[b_idxs, mi_gold_labels[:, 0], mi_gold_labels[:, 1]]  ## batch_size
                     loss = loss + (best_m0_score - mi_gold_scores).sum()
                     best_mi_label_rep = mi_label_rep[b_idxs, mi_gold_labels[:, 0], mi_gold_labels[:, 1]]  ## teacher-forcing.
+                else:
+                    best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
 
-        return loss
+        return UniversalOutput(loss=loss, all_logits=all_logits)
 
 
 def test_case_batch_two():
