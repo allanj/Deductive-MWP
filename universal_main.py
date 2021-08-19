@@ -131,7 +131,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
-    model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}").to(dev)
+    model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}", diff_param_for_height=config.diff_param_for_height).to(dev)
     if config.fp16:
         model.half()
         model.save_pretrained(f"model_files/{config.model_folder}")
@@ -257,7 +257,7 @@ def main():
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
     else:
         print(f"Testing the model now.")
-        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
+        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels, diff_param_for_height=conf.diff_param_for_height).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
