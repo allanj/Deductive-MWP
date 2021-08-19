@@ -42,7 +42,7 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
 
 
 class UniversalModel(BertPreTrainedModel):
-    def __init__(self, config: BertConfig):
+    def __init__(self, config: BertConfig, diff_param_for_height:bool=True):
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6
         assert self.num_labels == 6
@@ -50,17 +50,30 @@ class UniversalModel(BertPreTrainedModel):
 
         self.bert = BertModel(config)
 
-        self.linears = nn.ModuleList()
-        for i in range(self.num_labels):
-            self.linears.append(nn.Sequential(
-                nn.Linear(config.hidden_size, config.hidden_size),
-                nn.ReLU(),
-                nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
-                nn.Dropout(config.hidden_dropout_prob)
-            ))
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
+        self.diff_param_for_height = diff_param_for_height
         self.max_height = 4 ## 3 operation
+        self.linears = nn.ModuleList()
+        if diff_param_for_height:
+            for h in range(self.max_height):
+                current_linears = nn.ModuleList()
+                for i in range(self.num_labels):
+                    current_linears.append(nn.Sequential(
+                        nn.Linear(config.hidden_size, config.hidden_size),
+                        nn.ReLU(),
+                        nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+                        nn.Dropout(config.hidden_dropout_prob)
+                    ))
+                self.linears.append(current_linears)
+        else:
+            for i in range(self.num_labels):
+                self.linears.append(nn.Sequential(
+                    nn.Linear(config.hidden_size, config.hidden_size),
+                    nn.ReLU(),
+                    nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+                    nn.Dropout(config.hidden_dropout_prob)
+                ))
         self.init_weights()
 
 
@@ -116,6 +129,7 @@ class UniversalModel(BertPreTrainedModel):
         loss = 0
         all_logits = []
         for i in range(max_height):
+            linear_modules = self.linears[i] if self.diff_param_for_height else self.linears
             if i == 0:
                 ## max_num_variable = 4. -> [0,1,2,3]
                 num_var_range = torch.arange(0, max_num_variable, device=variable_indexs_start.device)
@@ -130,7 +144,7 @@ class UniversalModel(BertPreTrainedModel):
                 # batch_size, num_combinations/num_m0, hidden_size: 2,6,768
 
                 ## batch_size, num_combinations/num_m0, num_labels, hidden_size
-                m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in self.linears], dim=2)
+                m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
                 ## batch_size, num_combinations/num_m0, num_labels
                 m0_logits = self.label_rep2label(m0_label_rep).squeeze(-1)
                 m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels).log()
@@ -161,7 +175,7 @@ class UniversalModel(BertPreTrainedModel):
             else:
                 mi_sum_states = var_hidden_states + best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable, hidden_size)
                 ## batch_size, max_num_variable, num_labels, hidden_size
-                mi_label_rep = torch.stack([layer(mi_sum_states) for layer in self.linears], dim=2)
+                mi_label_rep = torch.stack([layer(mi_sum_states) for layer in linear_modules], dim=2)
                 ## for identity
                 expanded_best_mi_label_rep = best_mi_label_rep.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, self.num_labels, hidden_size)
                 mi_label_rep = torch.cat([mi_label_rep, expanded_best_mi_label_rep], dim = 1)

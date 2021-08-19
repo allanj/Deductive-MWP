@@ -32,6 +32,7 @@ class UniversalDataset(Dataset):
         self._features = []
         num_has_same_var_m0 = 0
         max_num_steps = 0
+        self.insts = []
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if not (obj['legal'] and obj['num_steps'] <= 2):
             #     continue
@@ -84,6 +85,7 @@ class UniversalDataset(Dataset):
                            variable_index_mask=var_mask,
                            labels = labels)
             )
+            self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}")
 
