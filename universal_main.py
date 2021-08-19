@@ -35,6 +35,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--train_file', type=str, default="data/complex/mwp_processed_train.json")
     parser.add_argument('--dev_file', type=str, default="data/complex/mwp_processed_test.json")
 
+    parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
+
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
     parser.add_argument('--model_folder', type=str, default="math_solver", help="the name of the models, to save the model")
@@ -234,9 +236,9 @@ def main():
     # Read dataset
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
-        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num)
+        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps)
         print("[Data Info] Reading validation data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num)
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps)
 
 
         # Prepare data loader
@@ -257,7 +259,7 @@ def main():
         print(f"Testing the model now.")
         model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num)
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
         res_file= f"results/{conf.model_folder}.res.json"

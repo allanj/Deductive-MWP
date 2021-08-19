@@ -23,7 +23,8 @@ class UniversalDataset(Dataset):
 
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, remove_repeated: bool = True) -> None:
+                 number: int = -1, remove_repeated: bool = True,
+                 filtered_steps: List = None) -> None:
         self.tokenizer = tokenizer
         data = read_data(file=file)
         if number > 0:
@@ -33,10 +34,16 @@ class UniversalDataset(Dataset):
         num_has_same_var_m0 = 0
         max_num_steps = 0
         self.insts = []
+        filtered_steps = [int(f) for f in filtered_steps]
+        numbert_instances_filtered = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if not (obj['legal'] and obj['num_steps'] <= 2):
             #     continue
             if not obj['legal']:
+                continue
+            if filtered_steps and obj['num_steps'] in filtered_steps:
+                ## in experiments, we can choose to filter some questions with specific steps
+                numbert_instances_filtered += 1
                 continue
             ## equation preprocessing
             # mapped_equation = obj["mapped_equation"]
@@ -87,7 +94,7 @@ class UniversalDataset(Dataset):
             )
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}")
+              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}")
 
     def __len__(self) -> int:
         return len(self._features)
