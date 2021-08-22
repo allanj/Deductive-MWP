@@ -16,7 +16,7 @@ uni_labels = [
     '+','-', '-_rev', '*', '/', '/_rev'
 ]
 
-UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels')
+UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
 UniFeature.__new__.__defaults__ = (None,) * 7
 
 class UniversalDataset(Dataset):
@@ -81,6 +81,7 @@ class UniversalDataset(Dataset):
             if not labels:
                 num_has_same_var_m0 += 1
                 continue
+            label_height_mask = [1] * len(labels)
             max_num_steps = max(max_num_steps, len(labels))
             self._features.append(
                 UniFeature(input_ids=input_ids,
@@ -90,7 +91,8 @@ class UniversalDataset(Dataset):
                            variable_indexs_end=var_ends,
                            num_variables=num_variable,
                            variable_index_mask=var_mask,
-                           labels = labels)
+                           labels = labels,
+                           label_height_mask=label_height_mask)
             )
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
@@ -108,24 +110,25 @@ class UniversalDataset(Dataset):
     def get_label_ids(self, equation_layers: List, remove_repeated: bool) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
         label_ids = []
-        for layer in equation_layers:
+        for l_idx, layer in enumerate(equation_layers):
             left_var, right_var, op = layer
             if left_var == right_var and remove_repeated:
                 return None
+            is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
             left_var_idx = ord(left_var) - ord('a') if left_var != "#" else -1
             right_var_idx = ord(right_var) - ord('a')
             if left_var_idx < right_var_idx:
                 op_idx = uni_labels.index(op)
-                label_ids.append([left_var_idx, right_var_idx, op_idx])
+                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 # left > right
                 if op in ["+", "*"]:
                     op_idx = uni_labels.index(op)
-                    label_ids.append([right_var_idx, left_var_idx, op_idx])
+                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:
                     assert not op.endswith("_rev")
                     op_idx = uni_labels.index(op + "_rev")
-                    label_ids.append([right_var_idx, left_var_idx, op_idx])
+                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
 
@@ -146,7 +149,9 @@ class UniversalDataset(Dataset):
             variable_index_mask = feature.variable_index_mask + [0] * padded_variable_idx_len
 
             padded_height = max_height - len(feature.labels)
-            labels = feature.labels + [[-1, max_num_variable, 0]]* padded_height
+            labels = feature.labels + [[-1, 0, 0, 0]]* padded_height ## useless, because we have height mask
+            label_height_mask = feature.label_height_mask + [0] * padded_height
+
 
             batch[i] = UniFeature(input_ids=np.asarray(input_ids),
                                 attention_mask=np.asarray(attn_mask),
@@ -155,7 +160,8 @@ class UniversalDataset(Dataset):
                                  variable_indexs_end=np.asarray(var_ends),
                                  num_variables=np.asarray(feature.num_variables),
                                  variable_index_mask=np.asarray(variable_index_mask),
-                                 labels =np.asarray(labels))
+                                 labels =np.asarray(labels),
+                                  label_height_mask=np.asarray(label_height_mask))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 

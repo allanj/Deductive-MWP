@@ -3,9 +3,9 @@
 
 
 
-diff_param=0
+diff_param=1
 filtered_steps=-1
-model_folder=universal_diff_${diff_param}
+model_folder=universal_update_loss
 
 TOKENIZERS_PARALLELISM=false \
 python3 universal_main.py --device=cuda:0 --model_folder=${model_folder} \

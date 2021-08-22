@@ -43,7 +43,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--bert_folder', type=str, default="hfl", help="The folder name that contains the BERT model")
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
-    parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
+    parser.add_argument('--diff_param_for_height', type=int, default=1, choices=[0,1])
 
 
     # training
@@ -103,7 +103,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                              variable_indexs_end=feature.variable_indexs_end.to(dev),
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
-                             labels=feature.labels.to(dev),
+                             labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True).loss
             if config.fp16:
                 scaler.scale(loss).backward()
@@ -151,7 +151,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              variable_indexs_end=feature.variable_indexs_end.to(dev),
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
-                             labels=feature.labels.to(dev),
+                             labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True, is_eval=True).all_logits
                 batch_size, max_num_variable = feature.variable_indexs_start.size()
                 num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
@@ -159,9 +159,12 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                 num_combinations, _ = combination.size()
                 batched_prediction = [[] for _ in range(batch_size)]
                 for k, logits in enumerate(all_logits):
-                    best_temp_score, best_temp_label = logits.max(dim=-1)  ## batch_size, num_combinations
+                    best_temp_logits, best_temp_stop_label = logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
+                    best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
                     best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                     best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
+                    b_idxs = [k for k in range(batch_size)]
+                    best_stop_label = best_temp_stop_label[b_idxs, best_comb, best_label]
                     if k == 0:
                         # batch_size x 2
                         best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
@@ -171,27 +174,28 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                         best_comb_var_idxs = best_comb
                     best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
                     best_labels = best_label.cpu().numpy()
-                    for b_idx, (best_comb_idx, best_label) in enumerate(zip(best_comb_var_idxs, best_labels)): ## within each instances:
+                    curr_best_stop_labels = best_stop_label.cpu().numpy()
+                    for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)): ## within each instances:
                         if isinstance(best_comb_idx, np.int64):
                             right = best_comb_idx
                             left = -1
                         else:
                             left, right = best_comb_idx
-                        curr_label = [left, right, best_label]
+                        curr_label = [left, right, best_label, stop_label]
                         batched_prediction[b_idx].append(curr_label)
                 ## post process remve extra
                 for b, inst_predictions in enumerate(batched_prediction):
                     for p, prediction_step in enumerate(inst_predictions):
-                        left, right, op_id = prediction_step
-                        if right == max_num_variable:
-                            batched_prediction[b] = batched_prediction[b][:p]
+                        left, right, op_id, stop_id = prediction_step
+                        if stop_id == 1:
+                            batched_prediction[b] = batched_prediction[b][:(p+1)]
                             break
                 batched_labels = feature.labels.cpu().numpy().tolist()
                 for b, inst_labels in enumerate(batched_labels):
                     for p, label_step in enumerate(inst_labels):
-                        left, right, op_id = label_step
-                        if right == max_num_variable:
-                            batched_labels[b] = batched_labels[b][:p]
+                        left, right, op_id, stop_id = label_step
+                        if stop_id == 1:
+                            batched_labels[b] = batched_labels[b][:(p+1)]
                             break
 
                 predictions.extend(batched_prediction)

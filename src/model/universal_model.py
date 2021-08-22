@@ -74,6 +74,7 @@ class UniversalModel(BertPreTrainedModel):
                     nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
                     nn.Dropout(config.hidden_dropout_prob)
                 ))
+        self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.init_weights()
 
 
@@ -89,7 +90,8 @@ class UniversalModel(BertPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         labels=None,
-        ## (batch_size, height, 3). (left_var_index, right_var_index, label_index) when height>=1, left_var_index always -1, because left always m0
+        ## (batch_size, height, 4). (left_var_index, right_var_index, label_index, stop_label) when height>=1, left_var_index always -1, because left always m0
+        label_height_mask = None, #  (batch_size, height)
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -146,10 +148,17 @@ class UniversalModel(BertPreTrainedModel):
                 ## batch_size, num_combinations/num_m0, num_labels, hidden_size
                 m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
                 ## batch_size, num_combinations/num_m0, num_labels
-                m0_logits = self.label_rep2label(m0_label_rep).squeeze(-1)
-                m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels).log()
-                all_logits.append(m0_logits)
-                best_temp_score, best_temp_label = m0_logits.max(dim=-1) ## batch_size, num_combinations
+                m0_logits = self.label_rep2label(m0_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
+                m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                ## batch_size, num_combinations/num_m0, num_labels, 2
+                m0_stopper_logits = self.stopper(m0_label_rep)
+
+                ## batch_size, num_combinations/num_m0, num_labels, 2
+                m0_combined_logits = m0_logits + m0_stopper_logits
+
+                all_logits.append(m0_combined_logits)
+                best_temp_logits, best_stop_label =  m0_combined_logits.max(dim=-1) ## batch_size, num_combinations/num_m0, num_labels
+                best_temp_score, best_temp_label = best_temp_logits.max(dim=-1) ## batch_size, num_combinations
                 best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
                 best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
 
@@ -158,17 +167,17 @@ class UniversalModel(BertPreTrainedModel):
                 # best_mi_label_rep = best_m0_label_rep
                 ## NOTE: add loosss
                 if labels is not None and not is_eval:
-                    m0_gold_labels = labels[:, i, :] ## batch_size x 3 (left_var_index, right_var_index, label_index)
+                    m0_gold_labels = labels[:, i, :] ## batch_size x 4 (left_var_index, right_var_index, label_index, stop_id)
                     m0_gold_comb = m0_gold_labels[:, :2].unsqueeze(1).expand(batch_size, num_combinations, 2)
                     batched_comb = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
                     judge = m0_gold_comb == batched_comb
                     judge = judge[:, :, 0] * judge[:, :, 1] #batch_size, num_combinations
                     judge = judge.nonzero()[:,1] #batch_size
 
-                    m0_gold_scores = m0_logits[b_idxs, judge, m0_gold_labels[:, -1]] ## batch_size
+                    m0_gold_scores = m0_combined_logits[b_idxs, judge, m0_gold_labels[:, 2], m0_gold_labels[:, 3]] ## batch_size
                     loss = loss +  (best_m0_score - m0_gold_scores).sum()
 
-                    best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, -1]] ## teacher-forcing.
+                    best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]] ## teacher-forcing.
                 else:
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
@@ -176,17 +185,19 @@ class UniversalModel(BertPreTrainedModel):
                 mi_sum_states = var_hidden_states + best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable, hidden_size)
                 ## batch_size, max_num_variable, num_labels, hidden_size
                 mi_label_rep = torch.stack([layer(mi_sum_states) for layer in linear_modules], dim=2)
-                ## for identity
-                expanded_best_mi_label_rep = best_mi_label_rep.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, self.num_labels, hidden_size)
-                mi_label_rep = torch.cat([mi_label_rep, expanded_best_mi_label_rep], dim = 1)
 
                 ## batch_size, max_num_variable, num_labels,
-                mi_logits = self.label_rep2label(mi_label_rep).squeeze(-1)
-                subpart_mi_logits = mi_logits[:, :-1, :] + variable_index_mask.unsqueeze(-1).expand(batch_size, max_num_variable, self.num_labels).log()
+                mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, max_num_variable, self.num_labels, 2)
+                mi_logits = mi_logits + variable_index_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, max_num_variable, self.num_labels, 2).log()
 
-                mi_logits = torch.cat([subpart_mi_logits, mi_logits[:, -1:, :]], dim=1) #batch_size, max_num_variable  + 1, self.num_labels
-                all_logits.append(mi_logits)
-                best_temp_score, best_temp_label = mi_logits.max(dim=-1)  ## batch_size, max_num_variable
+                ## batch_size, max_num_variable, num_labels, 2
+                mi_stopper_logits = self.stopper(mi_label_rep)
+                ## batch_size, max_num_variable, num_labels, 2
+                mi_combined_logits = mi_logits + mi_stopper_logits
+
+                all_logits.append(mi_combined_logits)
+                best_temp_logits, best_stop_label = mi_combined_logits.max( dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
+                best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, max_num_variable
                 best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                 best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
 
@@ -194,9 +205,11 @@ class UniversalModel(BertPreTrainedModel):
                 # best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 ## NOTE: add loss
                 if labels is not None and not is_eval:
-                    mi_gold_labels = labels[:, i, -2:]  ## batch_size x 2
-                    mi_gold_scores = mi_logits[b_idxs, mi_gold_labels[:, 0], mi_gold_labels[:, 1]]  ## batch_size
-                    loss = loss + (best_m0_score - mi_gold_scores).sum()
+                    mi_gold_labels = labels[:, i, -3:]  ## batch_size x 3 (variable_index, label_id, stop_id)
+                    height_mask = label_height_mask[:, i] ## batch_size
+                    mi_gold_scores = mi_combined_logits[b_idxs, mi_gold_labels[:, 0], mi_gold_labels[:, 1], mi_gold_labels[:, 2]]  ## batch_size
+                    current_loss = (best_m0_score - mi_gold_scores) * height_mask
+                    loss = loss + current_loss.sum()
                     best_mi_label_rep = mi_label_rep[b_idxs, mi_gold_labels[:, 0], mi_gold_labels[:, 1]]  ## teacher-forcing.
                 else:
                     best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
