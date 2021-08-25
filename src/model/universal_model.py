@@ -141,7 +141,7 @@ class UniversalModel(BertPreTrainedModel):
                 # batch_size x num_combinations. 2*6
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables, combination=combination)  # batch_size, num_combinations
 
-                var_comb_hidden_states = torch.gather(outputs.last_hidden_state, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
+                var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
                 m0_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size).sum(dim=-2)
                 # batch_size, num_combinations/num_m0, hidden_size: 2,6,768
 

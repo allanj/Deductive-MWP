@@ -34,7 +34,7 @@ class UniversalDataset(Dataset):
         num_has_same_var_m0 = 0
         max_num_steps = 0
         self.insts = []
-        filtered_steps = [int(f) for f in filtered_steps]
+        filtered_steps = [int(f) for f in filtered_steps] if filtered_steps else None
         numbert_instances_filtered = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if not (obj['legal'] and obj['num_steps'] <= 2):
