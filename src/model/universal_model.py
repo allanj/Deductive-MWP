@@ -74,12 +74,12 @@ class UniversalModel(BertPreTrainedModel):
                     nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
                     nn.Dropout(config.hidden_dropout_prob)
                 ))
-        # self.intermediate_transformation = nn.Sequential(
-        #             nn.Linear(3 * config.hidden_size, config.hidden_size),
-        #             nn.ReLU(),
-        #             nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
-        #             nn.Dropout(config.hidden_dropout_prob)
-        #         )
+        self.stopper_transformation = nn.Sequential(
+                    nn.Linear(config.hidden_size, config.hidden_size),
+                    nn.ReLU(),
+                    nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+                    nn.Dropout(config.hidden_dropout_prob)
+                )
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.init_weights()
@@ -160,7 +160,7 @@ class UniversalModel(BertPreTrainedModel):
                 m0_logits = self.label_rep2label(m0_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
                 m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
                 ## batch_size, num_combinations/num_m0, num_labels, 2
-                m0_stopper_logits = self.stopper(m0_label_rep)
+                m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
 
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_combined_logits = m0_logits + m0_stopper_logits
@@ -203,7 +203,7 @@ class UniversalModel(BertPreTrainedModel):
                 mi_logits = mi_logits + variable_index_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, max_num_variable, self.num_labels, 2).log()
 
                 ## batch_size, max_num_variable, num_labels, 2
-                mi_stopper_logits = self.stopper(mi_label_rep)
+                mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
                 ## batch_size, max_num_variable, num_labels, 2
                 mi_combined_logits = mi_logits + mi_stopper_logits
 
