@@ -26,6 +26,15 @@ class UniversalDataset(Dataset):
                  number: int = -1, remove_repeated: bool = True,
                  filtered_steps: List = None) -> None:
         self.tokenizer = tokenizer
+        if "complex" in file:
+            self.read_complex_file(file, tokenizer, number, remove_repeated, filtered_steps)
+        else:
+            self.read_math23k_file(file, tokenizer, number, remove_repeated, filtered_steps)
+
+    def read_complex_file(self, file: Union[str, None],
+                 tokenizer: PreTrainedTokenizerFast,
+                 number: int = -1, remove_repeated: bool = True,
+                 filtered_steps: List = None) -> None:
         data = read_data(file=file)
         if number > 0:
             data = data[:number]
@@ -97,6 +106,69 @@ class UniversalDataset(Dataset):
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}")
+
+    def read_math23k_file(self, file: Union[str, None],
+                 tokenizer: PreTrainedTokenizerFast,
+                 number: int = -1, remove_repeated: bool = True,
+                 filtered_steps: List = None) -> None:
+        data = read_data(file=file)
+        if number > 0:
+            data = data[:number]
+        # ## tokenization
+        self._features = []
+        num_has_same_var_m0 = 0
+        max_num_steps = 0
+        self.insts = []
+        numbert_instances_filtered = 0
+        for obj in tqdm(data, desc='Tokenization', total=len(data)):
+            if obj['type_str'] != "legal":
+                numbert_instances_filtered += 1
+                continue
+            mapped_text = obj["text"]
+            for k in range(ord('a'), ord('a') + 26):
+                mapped_text = mapped_text.replace(f"temp_{chr(k)}", " <quant> ")
+            mapped_text = mapped_text.split()
+            input_text = ""
+            for idx, word in enumerate(mapped_text):
+                if word.strip() == "<quant>":
+                    input_text += " <quant> "
+                elif word == "," or word == "，":
+                    input_text += word + " "
+                else:
+                    input_text += word
+            res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
+            input_ids = res["input_ids"]
+            attention_mask = res["attention_mask"]
+            tokens = tokenizer.convert_ids_to_tokens(input_ids)
+            var_starts = []
+            var_ends = []
+            for k, token in enumerate(tokens):
+                if token == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
+                    var_starts.append(k)
+                    var_ends.append(k+4)
+            num_variable = len(var_starts)
+            var_mask = [1] * num_variable
+            labels = self.get_label_ids(obj["equation_layer"], remove_repeated=remove_repeated)
+            if not labels:
+                num_has_same_var_m0 += 1
+                continue
+            label_height_mask = [1] * len(labels)
+            max_num_steps = max(max_num_steps, len(labels))
+            self._features.append(
+                UniFeature(input_ids=input_ids,
+                           attention_mask=attention_mask,
+                           token_type_ids = [0] * len(input_ids),
+                           variable_indexs_start=var_starts,
+                           variable_indexs_end=var_ends,
+                           num_variables=num_variable,
+                           variable_index_mask=var_mask,
+                           labels = labels,
+                           label_height_mask=label_height_mask)
+            )
+            self.insts.append(obj)
+        print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
+              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}")
+
 
     def __len__(self) -> int:
         return len(self._features)
@@ -170,4 +242,5 @@ if __name__ == '__main__':
     from transformers import BertTokenizer
 
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
-    dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
+    # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
+    dataset = UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
