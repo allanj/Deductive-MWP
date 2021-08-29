@@ -119,6 +119,7 @@ class UniversalDataset(Dataset):
         num_has_same_var_m0 = 0
         max_num_steps = 0
         self.insts = []
+        num_index_error = 0
         numbert_instances_filtered = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal":
@@ -152,6 +153,9 @@ class UniversalDataset(Dataset):
             if not labels:
                 num_has_same_var_m0 += 1
                 continue
+            if isinstance(labels, str):
+                num_index_error += 1
+                continue
             label_height_mask = [1] * len(labels)
             max_num_steps = max(max_num_steps, len(labels))
             self._features.append(
@@ -167,7 +171,7 @@ class UniversalDataset(Dataset):
             )
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}")
+              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}, num_index_error: {num_index_error}")
 
 
     def __len__(self) -> int:
@@ -187,8 +191,14 @@ class UniversalDataset(Dataset):
             if left_var == right_var and remove_repeated:
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
+
             left_var_idx = ord(left_var) - ord('a') if left_var != "#" else -1
             right_var_idx = ord(right_var) - ord('a')
+            assert right_var_idx >= 0
+            try:
+                assert left_var_idx >=0 or left_var_idx == -1
+            except:
+                return "index error"
             if left_var_idx < right_var_idx:
                 op_idx = uni_labels.index(op)
                 label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
@@ -244,3 +254,4 @@ if __name__ == '__main__':
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
     dataset = UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
+    dataset = UniversalDataset(file="../../data/math23k/train23k_processed_labeled.json", tokenizer=tokenizer)

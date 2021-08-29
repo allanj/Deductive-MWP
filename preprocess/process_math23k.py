@@ -8,7 +8,7 @@ from collections import Counter
 
 def have_constant_square(target_template: List) -> bool:
     for val in target_template:
-        if val.strip() == "1" or val.strip() == "pi" or val.strip() == "^":
+        if val.strip() == "1" or val.strip() == "pi" or val.strip() == "PI" or val.strip() == "^":
             return True
     return False
 
