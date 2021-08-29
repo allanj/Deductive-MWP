@@ -91,6 +91,11 @@ def process_obj(obj: Dict):
     if have_both_m:
         type_str = "have both m0, m1"
         return type_str, labels
+
+    for curr_labels in labels:
+        if curr_labels[0] == curr_labels[1]:
+            return "have same variable at each", labels
+
     return type_str, labels
 
 def main():

@@ -12,7 +12,7 @@ import os
 import random
 from src.model.universal_model import UniversalModel
 from collections import Counter
-
+from src.eval.utils import is_value_correct
 
 def set_seed(args):
     random.seed(args.seed)
@@ -203,6 +203,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     corr = 0
     num_label_step_corr = Counter()
     num_label_step_total = Counter()
+    insts = valid_dataloader.dataset.insts
     for inst_predictions, inst_labels in zip(predictions, labels):
         num_label_step_total[len(inst_labels)] += 1
         if len(inst_predictions) != len(inst_labels):
@@ -218,10 +219,24 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     total = len(labels)
     acc = corr*1.0/total
     print(f"[Info] Acc.:{acc*100:.2f} ", flush=True)
+
+    ##value accuarcy
+    val_corr = 0
+    num_label_step_val_corr = Counter()
+    for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
+        num_list = inst["num_list"]
+        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list)
+        val_corr += 1 if is_value_corr else 0
+        if is_value_corr:
+            num_label_step_val_corr[len(inst_labels)] += 1
+            corr += 1
+    val_acc = val_corr*1.0 / total
+    print(f"[Info] val Acc.:{val_acc * 100:.2f} ", flush=True)
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
+        curr_val_corr = num_label_step_val_corr[key]
         curr_total = num_label_step_total[key]
-        print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total})", flush=True)
+        print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total}) val acc: {curr_val_corr*1.0/curr_total * 100:.2f} ({curr_val_corr}/{curr_total})", flush=True)
     return acc
 
 def main():
