@@ -9,6 +9,7 @@ from collections import Counter
 def have_constant_square(target_template: List) -> bool:
     for val in target_template:
         if val.strip() == "1" or val.strip() == "pi" or val.strip() == "PI" or val.strip() == "^":
+        # if val.strip() == "^":
             return True
     return False
 
@@ -33,7 +34,7 @@ def have_multiple_m0(target_template: List):
             return True
     return False
 
-def get_labels(target_norm_post_template: List):
+def get_labels(target_norm_post_template: List, target_template: List):
     assert target_norm_post_template[:2] == ["x", "="]
     stack = []
     pointer = 2
@@ -67,13 +68,22 @@ def get_labels(target_norm_post_template: List):
                 left = left[-1:]
                 labels[i] = ["#", left, op+"_rev"] if op in {'-', '/', '^'} else ["#", left, op]
 
+    max_temp_org = max([v for v in target_template if v.startswith("temp_")])
+    max_temp_update = max([v for v in target_norm_post_template if v.startswith("temp_")])
+    gap = ord(max_temp_org[-1]) - ord(max_temp_update[-1])
+    if gap > 0:
+        for i, (left, right, op) in enumerate(labels):
+            if i == 0:
+                labels[i] = [chr(ord(left) + gap),  chr(ord(right) + gap),  op]
+            else:
+                labels[i] = ["#", chr(ord(right) + gap), op]
     return labels, both_m
 
 
 def process_obj(obj: Dict):
     target_template = [val.strip() for val in obj["target_template"]]
 
-    labels, have_both_m = get_labels(obj["target_norm_post_template"])
+    labels, have_both_m = get_labels(obj["target_norm_post_template"], obj["target_template"])
     type_str = "legal"
 
     if count_variable(target_template) > 4:
