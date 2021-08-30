@@ -1,7 +1,11 @@
 
 
-from src.data.universal_dataset import uni_labels
+
 import math
+
+uni_labels = [
+    '+','-', '-_rev', '*', '/', '/_rev'
+]
 
 def compute(left: float, right:float, op:str):
     if op == "+":
@@ -11,11 +15,11 @@ def compute(left: float, right:float, op:str):
     elif op == "*":
         return left * right
     elif op == "/":
-        return left / right
+        return (left * 1.0 / right) if right != 0 else  (left * 1.0 / 0.001)
     elif op == "-_rev":
         return right - left
     elif op == "/_rev":
-        return right * 1.0 / left
+        return (right * 1.0 / left) if left != 0 else  (right * 1.0 / 0.001)
     else:
         raise NotImplementedError(f"not implementad for op: {op}")
 
@@ -30,7 +34,7 @@ def compute_value(equations, num_list):
             assert current_value is not None
             current_value = compute(current_value, right_number, op)
         else:
-            current_value = compute(current_value, right_number, op)
+            current_value = compute(left_number, right_number, op)
     return current_value
 
 def is_value_correct(predictions, labels, num_list):

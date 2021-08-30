@@ -38,6 +38,7 @@ class Config:
         self.bert_model_name = args.bert_model_name
         self.bert_folder = args.bert_folder
         self.diff_param_for_height = args.diff_param_for_height
+        self.height = args.height
 
         self.train_file = args.train_file
         self.dev_file = args.dev_file

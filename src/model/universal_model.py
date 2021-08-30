@@ -42,7 +42,7 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
 
 
 class UniversalModel(BertPreTrainedModel):
-    def __init__(self, config: BertConfig, diff_param_for_height:bool=True):
+    def __init__(self, config: BertConfig, diff_param_for_height:bool=True, height: int = 4):
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6
         assert self.num_labels == 6
@@ -53,7 +53,7 @@ class UniversalModel(BertPreTrainedModel):
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
         self.diff_param_for_height = diff_param_for_height
-        self.max_height = 4 ## 3 operation
+        self.max_height = height ## 3 operation
         self.linears = nn.ModuleList()
         if diff_param_for_height:
             for h in range(self.max_height):

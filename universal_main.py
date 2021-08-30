@@ -44,7 +44,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
     parser.add_argument('--diff_param_for_height', type=int, default=1, choices=[0,1])
-
+    parser.add_argument('--height', type=int, default=4, help="the model height")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -77,7 +77,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
-    model = UniversalModel.from_pretrained(bert_model_name, diff_param_for_height=config.diff_param_for_height, num_labels=num_labels).to(dev)
+    model = UniversalModel.from_pretrained(bert_model_name, diff_param_for_height=config.diff_param_for_height, num_labels=num_labels, height=config.height).to(dev)
     if config.parallel:
         model = nn.DataParallel(model)
 
