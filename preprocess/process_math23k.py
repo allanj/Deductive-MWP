@@ -6,12 +6,26 @@ import re
 from tqdm import tqdm
 from collections import Counter
 
-def have_constant_square(target_template: List) -> bool:
+def have_constant(target_template: List) -> bool:
     for val in target_template:
-        if val.strip() == "1" or val.strip() == "pi" or val.strip() == "PI" or val.strip() == "^":
-        # if val.strip() == "^":
+        if val.strip() == "1":
+        # if val.strip() == "pi" or val.strip() == "PI":
             return True
     return False
+
+def have_pi(target_template: List) -> bool:
+    for val in target_template:
+        if val.strip() == "PI":
+        # if val.strip() == "pi" or val.strip() == "PI":
+            return True
+    return False
+
+def have_square(target_template: List) -> bool:
+    for val in target_template:
+        if val.strip() == "^":
+            return True
+    return False
+
 
 def count_variable(target_template: List) -> int:
     num_vars = set()
@@ -53,31 +67,58 @@ def get_labels(target_norm_post_template: List, target_template: List):
                 stack.append(f"m_{len(labels)}")
         pointer += 1
     for i, (left, right, op) in enumerate(labels):
-        if i == 0:
-            left = left[-1:]
-            right = right[-1:]
-            if left > right and op in {'-', '/', '^'}:
-                labels[i] = [right, left, op+"_rev"]
-            else:
-                labels[i] = [left, right, op]
+        # left = left[-1:] if left.startswith("temp_") else left
+        # right = right[-1:] if right.startswith("temp_") else right
+        if left.startswith("m_") or right.startswith("m_"):
+            if left.startswith("m_") and right.startswith("m_"):
+                left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) < 0
+                modified_op = op + "_rev" if op in {'-', '/', '^'} and (not left_is_smaller) else op
+                labels[i] = [left, right, modified_op] if left_is_smaller else [right, left, modified_op]
+            elif right.startswith("m_"):
+                modified_op = op + "_rev" if op in {'-', '/', '^'} else op
+                labels[i] = [right, left, modified_op]
         else:
-            if left.startswith("m"):
-                right = right[-1:]
-                labels[i] = ["#", right, op]
+            if left.startswith("temp_") or right.startswith("temp_"):
+                if left.startswith("temp_") and right.startswith("temp_"):
+                    left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) < 0
+                    modified_op = op + "_rev" if op in {'-', '/', '^'} and (not left_is_smaller) else op
+                    labels[i] = [left, right, modified_op] if left_is_smaller else [right, left, modified_op]
+                elif right.startswith("temp_"):
+                    modified_op = op + "_rev" if op in {'-', '/', '^'} else op
+                    labels[i] = [right, left, modified_op]
+                else:
+                    assert right in {"1", "PI", "pi"}
             else:
-                left = left[-1:]
-                labels[i] = ["#", left, op+"_rev"] if op in {'-', '/', '^'} else ["#", left, op]
+                pass
+                # raise NotImplementedError(f"all constant for label: {labels[i]}")
+
+    for i, (left, right, op) in enumerate(labels):
+        left = left[-1:] if left.startswith("temp_") else left
+        right = right[-1:] if right.startswith("temp_") else right
+        # if (left == "PI" or right == "PI"):# and op not in {'*', '/'}:
+        #     print(labels[i])
+        labels[i] = [left, right, op]
 
     max_temp_org = max([v for v in target_template if v.startswith("temp_")])
     max_temp_update = max([v for v in target_norm_post_template if v.startswith("temp_")])
     gap = ord(max_temp_org[-1]) - ord(max_temp_update[-1])
     if gap > 0:
         for i, (left, right, op) in enumerate(labels):
-            if i == 0:
-                labels[i] = [chr(ord(left) + gap),  chr(ord(right) + gap),  op]
-            else:
-                labels[i] = ["#", chr(ord(right) + gap), op]
+            left = chr(ord(left) + gap) if len(left) == 1 and ord(left) >= ord('a') and ord(left) <= ord('z') else left
+            right = chr(ord(right) + gap) if len(right) == 1 and ord(right) >= ord('a') and ord(right) <= ord('z') else right
+            labels[i] = [left, right, op]
     return labels, both_m
+
+def check_intermediate_m_in_order(labels: List[List[str]]):
+    current_m_idx = 0
+    for idx, (left_var, right_var, op) in enumerate(labels):
+        if left_var.startswith("m"):
+            # try:
+            assert int(left_var[2:]) - current_m_idx == 1
+            # except:
+            #     print("not incremental")
+            current_m_idx += 1
+    return True
 
 
 def process_obj(obj: Dict):
@@ -90,9 +131,19 @@ def process_obj(obj: Dict):
         type_str = "variable more than 4"
         return type_str, labels
 
-    if have_constant_square(target_template):
-        type_str = "have constant"
+    if have_square(target_template):
+        type_str = "have square"
         return type_str, labels
+
+    # if have_constant(target_template):
+    #     type_str = "have constant"
+    #     return type_str, labels
+    #
+    # if have_pi(target_template):
+    #     type_str = "have pi"
+    #     print(obj["equation"], obj["target_template"])
+    #     return type_str, labels
+
 
     if have_multiple_m0(target_template):
         type_str = "have mutiple m0"
@@ -120,6 +171,8 @@ def main():
             count[type_str] += 1
             obj["type_str"] = type_str
             obj["equation_layer"] = labels
+            if type_str == "legal":
+                check_intermediate_m_in_order(labels)
         write_data(file=out_file, data = data)
 
         for key in count:

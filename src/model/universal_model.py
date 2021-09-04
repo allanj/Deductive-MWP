@@ -42,7 +42,10 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
 
 
 class UniversalModel(BertPreTrainedModel):
-    def __init__(self, config: BertConfig, diff_param_for_height:bool=True, height: int = 4):
+    def __init__(self, config: BertConfig,
+                 diff_param_for_height:bool=True,
+                 height: int = 4,
+                 constant_num: int = 0):
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6
         assert self.num_labels == 6
@@ -82,6 +85,12 @@ class UniversalModel(BertPreTrainedModel):
                 )
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
+
+        self.constant_num = constant_num
+        self.constant_emb = None
+        if self.constant_num > 0:
+            self.const_rep = nn.Parameter(torch.randn(self.constant_num, config.hidden_size))
+
         self.init_weights()
 
 
@@ -134,6 +143,14 @@ class UniversalModel(BertPreTrainedModel):
         var_start_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_start.unsqueeze(-1).expand(batch_size, max_num_variable,  hidden_size))
         var_end_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_end.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
         var_hidden_states = var_start_hidden_states + var_end_hidden_states
+        if self.constant_num > 0:
+            constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
+            var_hidden_states = torch.cat([constant_hidden_states, var_hidden_states], dim=1)
+            num_variables = num_variables + self.constant_num
+            max_num_variable = max_num_variable + self.constant_num
+            const_idx_mask = torch.ones((batch_size, self.constant_num), device=variable_indexs_start.device)
+            variable_index_mask = torch.cat([const_idx_mask, variable_index_mask], dim = 1)
+
         best_mi_label_rep = None
         loss = 0
         all_logits = []
@@ -230,7 +247,7 @@ class UniversalModel(BertPreTrainedModel):
 
 
 def test_case_batch_two():
-    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6)
+    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=2)
     from transformers import BertTokenizer
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     uni_labels = [
@@ -252,27 +269,38 @@ def test_case_batch_two():
     labels = torch.tensor([
         [
             [
-                0, 1, uni_labels.index('/_rev')
+                0, 1, uni_labels.index('/_rev'), 0
             ],
             [
-                -1, 3, 0 ## 3 means, for this one, we directly forward
+                -1, 2, 1, 1 ## 3 means, for this one, we directly forward
             ],
             [
-                -1, 3, 0 ## 3 means, for this one, we directly forward
+                -1, 0, 0, 0 ## 3 means, for this one, we directly forward
             ]
         ],
         [
             [
-                0, 1, uni_labels.index('-')
+                0, 1, uni_labels.index('-'), 0
             ],
             [
-                -1, 2, uni_labels.index('+')
+                -1, 2, uni_labels.index('+'), 0
             ],
             [
-                -1, 3, 0 ## 3 means, for this one, we directly forward
+                -1, 3, 0, 1 ## 3 means, for this one, we directly forward
             ]
         ]
     ])
+    label_height_mask = torch.tensor(
+        [
+            [
+                1, 1, 0
+            ],
+            [
+                1, 1, 1
+            ]
+        ]
+    )
+    print(label_height_mask.size())
     print(labels.size())
     print(model(input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -281,6 +309,7 @@ def test_case_batch_two():
                 variable_indexs_end=variable_indexs_end,
                 num_variables=num_variables,
                 variable_index_mask=variable_index_mask,
+                label_height_mask = label_height_mask,
                 labels=labels))
 
 if __name__ == '__main__':

@@ -4,10 +4,12 @@ from transformers import PreTrainedTokenizerFast, MBartTokenizerFast
 from tqdm import tqdm
 from torch.utils.data._utils.collate import default_collate
 import numpy as np
-from src.utils import read_data
-import torch
+from src.utils import read_data, write_data
 import collections
 import re
+from src.eval.utils import compute_value
+import math
+from typing import Dict, List
 
 """
 not finished yet
@@ -24,8 +26,12 @@ class UniversalDataset(Dataset):
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
                  number: int = -1, remove_repeated: bool = True,
-                 filtered_steps: List = None) -> None:
+                 filtered_steps: List = None,
+                 constant2id: Dict[str, int] = None,
+                 constant_values: List[float] = None) -> None:
         self.tokenizer = tokenizer
+        self.constant2id = constant2id
+        self.constant_values = constant_values
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, remove_repeated, filtered_steps)
         else:
@@ -149,13 +155,23 @@ class UniversalDataset(Dataset):
                     var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
-            labels = self.get_label_ids(obj["equation_layer"], remove_repeated=remove_repeated)
+            labels = self.get_label_ids_updated(obj["equation_layer"], remove_repeated=remove_repeated)
+
             if not labels:
                 num_has_same_var_m0 += 1
+                obj['type_str'] = "illegal"
                 continue
+            # compute_value(labels, obj["num_list"])
+
             if isinstance(labels, str):
                 num_index_error += 1
+                obj['type_str'] = "illegal"
                 continue
+            res = compute_value(labels, obj["num_list"], len(self.constant2id), constant_values=self.constant_values)
+            try:
+                assert math.fabs(res - obj["answer"]) < 1e-4
+            except:
+                print("not equal")
             label_height_mask = [1] * len(labels)
             max_num_steps = max(max_num_steps, len(labels))
             self._features.append(
@@ -214,6 +230,48 @@ class UniversalDataset(Dataset):
         return label_ids
 
 
+    def get_label_ids_updated(self, equation_layers: List, remove_repeated: bool) -> Union[List[List[int]], None]:
+        # in this data, only have one or zero bracket
+        label_ids = []
+        num_constant = len(self.constant2id) if self.constant2id is not None else 0
+        for l_idx, layer in enumerate(equation_layers):
+            left_var, right_var, op = layer
+            if left_var == right_var and remove_repeated:
+                return None
+            is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
+
+            if left_var != "#" and (not left_var.startswith("m")):
+                if self.constant2id is not None and left_var in self.constant2id:
+                    left_var_idx = self.constant2id[left_var]
+                else:
+                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    left_var_idx = (ord(left_var) - ord('a') + num_constant)
+            else:
+                left_var_idx = -1
+            right_var_idx = (ord(right_var) - ord('a') + num_constant) if self.constant2id is None or (right_var not in self.constant2id) else self.constant2id[right_var]
+            try:
+                assert right_var_idx >= 0
+            except:
+                print("right var index error")
+                return "right var index error"
+            try:
+                assert left_var_idx >= -1
+            except:
+                return "index error"
+            if left_var_idx < right_var_idx:
+                op_idx = uni_labels.index(op)
+                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+            else:
+                # left > right
+                if op in ["+", "*"]:
+                    op_idx = uni_labels.index(op)
+                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                else:
+                    # assert not op.endswith("_rev")
+                    op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else  uni_labels.index(op[:-4])
+                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+        return label_ids
+
 
     def collate_function(self, batch: List[UniFeature]):
 
@@ -253,5 +311,8 @@ if __name__ == '__main__':
 
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
-    dataset = UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
-    dataset = UniversalDataset(file="../../data/math23k/train23k_processed_labeled.json", tokenizer=tokenizer)
+    constant2id = {"1": 0, "PI": 1}
+    constant_values = [1.0, 3.14]
+    UniversalDataset(file="../../data/math23k/test23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
+    UniversalDataset(file="../../data/math23k/train23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
+    UniversalDataset(file="../../data/math23k/valid23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
