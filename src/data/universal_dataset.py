@@ -192,8 +192,8 @@ class UniversalDataset(Dataset):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
 
-            left_var_idx = ord(left_var) - ord('a') if left_var != "#" else -1
-            right_var_idx = ord(right_var) - ord('a')
+            left_var_idx = (ord(left_var) - ord('a')) if left_var != "#" else -1
+            right_var_idx = (ord(right_var) - ord('a'))
             assert right_var_idx >= 0
             try:
                 assert left_var_idx >=0 or left_var_idx == -1
