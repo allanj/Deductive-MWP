@@ -26,7 +26,7 @@ class UniversalDataset(Dataset):
 
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, remove_repeated: bool = True,
+                 number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
                  constant_values: List[float] = None) -> None:
@@ -35,13 +35,13 @@ class UniversalDataset(Dataset):
         self.constant_values = constant_values
         self.constant_num = len(self.constant2id) if self.constant2id else 0
         if "complex" in file:
-            self.read_complex_file(file, tokenizer, number, remove_repeated, filtered_steps)
+            self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
-            self.read_math23k_file(file, tokenizer, number, remove_repeated, filtered_steps)
+            self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
 
     def read_complex_file(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, remove_repeated: bool = True,
+                 number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None) -> None:
         data = read_data(file=file)
         if number > 0:
@@ -94,7 +94,7 @@ class UniversalDataset(Dataset):
                     var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
-            labels = self.get_label_ids(obj["equation_layer"], remove_repeated=remove_repeated)
+            labels = self.get_label_ids(obj["equation_layer"], add_replacement=add_replacement)
             if not labels:
                 num_has_same_var_m0 += 1
                 continue
@@ -117,7 +117,7 @@ class UniversalDataset(Dataset):
 
     def read_math23k_file(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, remove_repeated: bool = True,
+                 number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None) -> None:
         data = read_data(file=file)
         if number > 0:
@@ -158,13 +158,17 @@ class UniversalDataset(Dataset):
                     var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
-            labels = self.get_label_ids_updated(obj["equation_layer"], remove_repeated=remove_repeated)
+            labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
 
             if not labels:
                 num_has_same_var_m0 += 1
                 obj['type_str'] = "illegal"
                 continue
             # compute_value(labels, obj["num_list"])
+
+            if len(labels) > 10:
+                numbert_instances_filtered += 1
+                continue
 
             if isinstance(labels, str):
                 num_index_error += 1
@@ -177,9 +181,7 @@ class UniversalDataset(Dataset):
                 print("not equal")
             label_height_mask = [1] * len(labels)
             num_step_count[len(labels)] += 1
-            if len(labels) > 10:
-                numbert_instances_filtered += 1
-                continue
+
             max_num_steps = max(max_num_steps, len(labels))
             self._features.append(
                 UniFeature(input_ids=input_ids,
@@ -206,12 +208,12 @@ class UniversalDataset(Dataset):
 
 
 
-    def get_label_ids(self, equation_layers: List, remove_repeated: bool) -> Union[List[List[int]], None]:
+    def get_label_ids(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
         label_ids = []
         for l_idx, layer in enumerate(equation_layers):
             left_var, right_var, op = layer
-            if left_var == right_var and remove_repeated:
+            if left_var == right_var and (not add_replacement):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
 
@@ -237,13 +239,13 @@ class UniversalDataset(Dataset):
         return label_ids
 
 
-    def get_label_ids_updated(self, equation_layers: List, remove_repeated: bool) -> Union[List[List[int]], None]:
+    def get_label_ids_updated(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
         label_ids = []
         num_constant = len(self.constant2id) if self.constant2id is not None else 0
         for l_idx, layer in enumerate(equation_layers):
             left_var, right_var, op = layer
-            if left_var == right_var and remove_repeated:
+            if left_var == right_var and (not add_replacement):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
 
@@ -251,7 +253,10 @@ class UniversalDataset(Dataset):
                 if self.constant2id is not None and left_var in self.constant2id:
                     left_var_idx = self.constant2id[left_var]
                 else:
-                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    try:
+                        assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    except:
+                        print("seohting")
                     left_var_idx = (ord(left_var) - ord('a') + num_constant)
             else:
                 left_var_idx = -1
@@ -265,12 +270,14 @@ class UniversalDataset(Dataset):
                 assert left_var_idx >= -1
             except:
                 return "index error"
-            if left_var_idx < right_var_idx:
+            if left_var_idx <= right_var_idx:
+                if left_var_idx == right_var_idx and op.endswith("_rev"):
+                    op = op[:-4]
                 op_idx = uni_labels.index(op)
                 label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 # left > right
-                if op in ["+", "*"]:
+                if (op in ["+", "*"]):
                     op_idx = uni_labels.index(op)
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:

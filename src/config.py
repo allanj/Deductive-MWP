@@ -41,6 +41,7 @@ class Config:
         self.height = args.height
 
         self.use_constant = args.use_constant
+        self.add_replacement = args.add_replacement
 
         self.train_file = args.train_file
         self.dev_file = args.dev_file

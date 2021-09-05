@@ -71,7 +71,7 @@ def get_labels(target_norm_post_template: List, target_template: List):
         # right = right[-1:] if right.startswith("temp_") else right
         if left.startswith("m_") or right.startswith("m_"):
             if left.startswith("m_") and right.startswith("m_"):
-                left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) < 0
+                left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) <= 0
                 modified_op = op + "_rev" if op in {'-', '/', '^'} and (not left_is_smaller) else op
                 labels[i] = [left, right, modified_op] if left_is_smaller else [right, left, modified_op]
             elif right.startswith("m_"):
@@ -80,14 +80,14 @@ def get_labels(target_norm_post_template: List, target_template: List):
         else:
             if left.startswith("temp_") or right.startswith("temp_"):
                 if left.startswith("temp_") and right.startswith("temp_"):
-                    left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) < 0
+                    left_is_smaller = (ord(left[-1:]) - ord(right[-1:])) <= 0
                     modified_op = op + "_rev" if op in {'-', '/', '^'} and (not left_is_smaller) else op
                     labels[i] = [left, right, modified_op] if left_is_smaller else [right, left, modified_op]
                 elif right.startswith("temp_"):
                     modified_op = op + "_rev" if op in {'-', '/', '^'} else op
                     labels[i] = [right, left, modified_op]
                 else:
-                    assert right in {"1", "PI", "pi"}
+                    assert right in {"1", "PI"}
             else:
                 pass
                 # raise NotImplementedError(f"all constant for label: {labels[i]}")

@@ -45,14 +45,15 @@ class UniversalModel(BertPreTrainedModel):
     def __init__(self, config: BertConfig,
                  diff_param_for_height:bool=True,
                  height: int = 4,
-                 constant_num: int = 0):
+                 constant_num: int = 0,
+                 add_replacement: bool = False):
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6
         assert self.num_labels == 6
         self.config = config
 
         self.bert = BertModel(config)
-
+        self.add_replacement = add_replacement
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
         self.diff_param_for_height = diff_param_for_height
@@ -90,6 +91,8 @@ class UniversalModel(BertPreTrainedModel):
         self.constant_emb = None
         if self.constant_num > 0:
             self.const_rep = nn.Parameter(torch.randn(self.constant_num, config.hidden_size))
+            self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6)
+
 
         self.init_weights()
 
@@ -160,7 +163,7 @@ class UniversalModel(BertPreTrainedModel):
                 ## max_num_variable = 4. -> [0,1,2,3]
                 num_var_range = torch.arange(0, max_num_variable, device=variable_indexs_start.device)
                 ## 6x2 matrix
-                combination = torch.combinations(num_var_range, r=2, with_replacement=False)  ##number_of_combinations x 2
+                combination = torch.combinations(num_var_range, r=2, with_replacement=self.add_replacement)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 # batch_size x num_combinations. 2*6
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables, combination=combination)  # batch_size, num_combinations
