@@ -10,6 +10,7 @@ import re
 from src.eval.utils import compute_value
 import math
 from typing import Dict, List
+from collections import Counter
 
 """
 not finished yet
@@ -128,6 +129,7 @@ class UniversalDataset(Dataset):
         self.insts = []
         num_index_error = 0
         numbert_instances_filtered = 0
+        num_step_count = Counter()
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal":
                 numbert_instances_filtered += 1
@@ -174,6 +176,10 @@ class UniversalDataset(Dataset):
             except:
                 print("not equal")
             label_height_mask = [1] * len(labels)
+            num_step_count[len(labels)] += 1
+            if len(labels) > 10:
+                numbert_instances_filtered += 1
+                continue
             max_num_steps = max(max_num_steps, len(labels))
             self._features.append(
                 UniFeature(input_ids=input_ids,
@@ -189,7 +195,7 @@ class UniversalDataset(Dataset):
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}, num_index_error: {num_index_error}")
-
+        print(num_step_count)
 
     def __len__(self) -> int:
         return len(self._features)
