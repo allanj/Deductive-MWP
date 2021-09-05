@@ -13,6 +13,7 @@ import random
 from src.model.universal_model import UniversalModel
 from collections import Counter
 from src.eval.utils import is_value_correct
+from typing import List
 
 def set_seed(args):
     random.seed(args.seed)
@@ -36,6 +37,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--dev_file', type=str, default="data/complex/mwp_processed_test.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
+    parser.add_argument('--use_constant', default=0, choices=[0,1], help="whether to use constant 1 and pi")
 
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
@@ -72,12 +74,18 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
 def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
           bert_model_name: str, num_labels: int,
-          dev: torch.device, tokenizer: PreTrainedTokenizer, valid_dataloader: DataLoader = None):
+          dev: torch.device, tokenizer: PreTrainedTokenizer, valid_dataloader: DataLoader = None,
+          constant_values: List = None):
 
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
-    model = UniversalModel.from_pretrained(bert_model_name, diff_param_for_height=config.diff_param_for_height, num_labels=num_labels, height=config.height).to(dev)
+    constant_num = len(constant_values) if constant_values else 0
+    model = UniversalModel.from_pretrained(bert_model_name,
+                                           diff_param_for_height=config.diff_param_for_height,
+                                           num_labels=num_labels,
+                                           height=config.height,
+                                           constant_num=constant_num).to(dev)
     if config.parallel:
         model = nn.DataParallel(model)
 
@@ -123,7 +131,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
         if valid_dataloader is not None:
-            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16))
+            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values)
             if performance > best_performance:
                 print(f"[Model Info] Saving the best model... with performance {performance}..")
                 best_performance = performance
@@ -131,17 +139,22 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
-    model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}", diff_param_for_height=config.diff_param_for_height).to(dev)
+    model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}",
+                                           diff_param_for_height=config.diff_param_for_height,
+                                           num_labels=num_labels,
+                                           height=config.height,
+                                           constant_num=constant_num).to(dev)
     if config.fp16:
         model.half()
         model.save_pretrained(f"model_files/{config.model_folder}")
         tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     return model
 
-def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool) -> float:
+def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List) -> float:
     model.eval()
     predictions = []
     labels = []
+    constant_num = len(constant_values) if constant_values else 0
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
@@ -154,6 +167,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True, is_eval=True).all_logits
                 batch_size, max_num_variable = feature.variable_indexs_start.size()
+                max_num_variable = max_num_variable + constant_num
                 num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
                 combination = torch.combinations(num_var_range, r=2, with_replacement=False)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()
@@ -225,7 +239,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     num_label_step_val_corr = Counter()
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
-        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list)
+        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values)
         val_corr += 1 if is_value_corr else 0
         if is_value_corr:
             num_label_step_val_corr[len(inst_labels)] += 1
@@ -251,13 +265,23 @@ def main():
 
     tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
 
+    if conf.use_constant:
+        constant2id = {"1": 0, "PI": 1}
+        constant_values = [1.0, 3.14]
+        constant_number = len(constant_values)
+    else:
+        constant2id = None
+        constant_values = None
+        constant_number = 0
 
     # Read dataset
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
-        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps)
+        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps,
+                                   constant2id=constant2id, constant_values=constant_values)
         print("[Data Info] Reading validation data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps)
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+                                        constant2id=constant2id, constant_values=constant_values)
 
 
         # Prepare data loader
@@ -270,20 +294,26 @@ def main():
         # Train the model
         model = train(conf, train_dataloader,
                       num_epochs= conf.num_epochs,
-                      bert_model_name= bert_model_name,
-                      valid_dataloader= valid_dataloader,
-                      dev=conf.device, tokenizer=tokenizer, num_labels=num_labels)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
+                      bert_model_name = bert_model_name,
+                      valid_dataloader = valid_dataloader,
+                      dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
+                      constant_values=constant_values)
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values)
     else:
         print(f"Testing the model now.")
-        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}", num_labels=num_labels, diff_param_for_height=conf.diff_param_for_height).to(conf.device)
+        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}",
+                                               num_labels=num_labels,
+                                               diff_param_for_height=conf.diff_param_for_height,
+                                               height = conf.height,
+                                               constant_num = constant_number).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps)
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+                                        constant2id=constant2id, constant_values=constant_values)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values)
 
 if __name__ == "__main__":
     main()

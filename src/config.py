@@ -40,6 +40,8 @@ class Config:
         self.diff_param_for_height = args.diff_param_for_height
         self.height = args.height
 
+        self.use_constant = args.use_constant
+
         self.train_file = args.train_file
         self.dev_file = args.dev_file
 

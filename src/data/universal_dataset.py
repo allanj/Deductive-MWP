@@ -32,6 +32,7 @@ class UniversalDataset(Dataset):
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values
+        self.constant_num = len(self.constant2id) if self.constant2id else 0
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, remove_repeated, filtered_steps)
         else:
@@ -167,7 +168,7 @@ class UniversalDataset(Dataset):
                 num_index_error += 1
                 obj['type_str'] = "illegal"
                 continue
-            res = compute_value(labels, obj["num_list"], len(self.constant2id), constant_values=self.constant_values)
+            res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
             try:
                 assert math.fabs(res - obj["answer"]) < 1e-4
             except:

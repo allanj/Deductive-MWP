@@ -40,9 +40,9 @@ def compute_value(equations, num_list, num_constant, constant_values: List[float
             current_value = compute(left_number, right_number, op)
     return current_value
 
-def is_value_correct(predictions, labels, num_list):
-    pred_val = compute_value(predictions, num_list)
-    gold_val = compute_value(labels, num_list)
+def is_value_correct(predictions, labels, num_list, num_constant, constant_values: List[float] = None):
+    pred_val = compute_value(predictions, num_list, num_constant, constant_values)
+    gold_val = compute_value(labels, num_list, num_constant, constant_values)
     if math.fabs((gold_val- pred_val)) < 1e-4:
         return True
     else:
