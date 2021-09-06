@@ -107,7 +107,7 @@ def get_labels(target_norm_post_template: List, target_template: List):
             left = chr(ord(left) + gap) if len(left) == 1 and ord(left) >= ord('a') and ord(left) <= ord('z') else left
             right = chr(ord(right) + gap) if len(right) == 1 and ord(right) >= ord('a') and ord(right) <= ord('z') else right
             labels[i] = [left, right, op]
-    return labels, both_m
+    return labels, both_m, gap
 
 def check_intermediate_m_in_order(labels: List[List[str]]):
     current_m_idx = 0
@@ -124,16 +124,13 @@ def check_intermediate_m_in_order(labels: List[List[str]]):
 def process_obj(obj: Dict):
     target_template = [val.strip() for val in obj["target_template"]]
 
-    labels, have_both_m = get_labels(obj["target_norm_post_template"], obj["target_template"])
+    labels, have_both_m, gap = get_labels(obj["target_norm_post_template"], obj["target_template"])
     type_str = "legal"
 
-    if count_variable(target_template) > 4:
-        type_str = "variable more than 4"
-        return type_str, labels
+    if count_variable(target_template) > 7: ## only 2 in test
+        type_str = "variable more than 7"
+        return type_str, labels, gap
 
-    if have_square(target_template):
-        type_str = "have square"
-        return type_str, labels
 
     # if have_constant(target_template):
     #     type_str = "have constant"
@@ -144,30 +141,47 @@ def process_obj(obj: Dict):
     #     print(obj["equation"], obj["target_template"])
     #     return type_str, labels
 
-
-    if have_multiple_m0(target_template):
-        type_str = "have mutiple m0"
-        return type_str, labels
+    if have_square(target_template): ## only 1 in test
+        type_str = "have square"
+        return type_str, labels, gap
 
     if have_both_m:
         type_str = "have both m0, m1"
-        return type_str, labels
+        return type_str, labels, gap
 
-    for curr_labels in labels:
+
+    have_same_variable = []
+    for idx, curr_labels in enumerate(labels):
         if curr_labels[0] == curr_labels[1]:
-            return "have same variable at each", labels
+            have_same_variable.append(idx)
+    if len(have_same_variable) > 0:
+        if len(have_same_variable) == 1 and have_same_variable[0] == 0:
+            return "legal", labels, gap
+        else:
+            return "have same variable at multiple layer", labels, gap
 
-    return type_str, labels
+    if have_multiple_m0(target_template):
+        type_str = "have mutiple m0"
+        return type_str, labels, gap
+
+
+
+
+
+    return type_str, labels, gap
 
 def main():
     for in_file in ["train23k_processed.json", "valid23k_processed.json", "test23k_processed.json"]:
         print(f"working on... {in_file}")
         in_file = f"../data/math23k/{in_file}"
-        out_file = in_file.split(".json")[0] + "_labeled.json"
+        out_file = in_file.split(".json")[0] + "_replacement.json"
         data = read_data(in_file)
         count = Counter()
+        inst_num_with_gap = 0
         for obj in tqdm(data, desc="processing data", total=len(data)):
-            type_str, labels = process_obj(obj)
+            type_str, labels, gap = process_obj(obj)
+            if gap > 0:
+                inst_num_with_gap += 1
             count[type_str] += 1
             obj["type_str"] = type_str
             obj["equation_layer"] = labels
@@ -175,6 +189,7 @@ def main():
                 check_intermediate_m_in_order(labels)
         write_data(file=out_file, data = data)
 
+        print(inst_num_with_gap)
         for key in count:
             print(f"{key}, valid number: {count[key]}, total: {len(data)}, %: {count[key] * 1.0 / len(data) * 100:.2f}")
 

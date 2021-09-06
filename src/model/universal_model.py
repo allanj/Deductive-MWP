@@ -53,7 +53,7 @@ class UniversalModel(BertPreTrainedModel):
         self.config = config
 
         self.bert = BertModel(config)
-        self.add_replacement = add_replacement
+        self.add_replacement = bool(add_replacement)
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
         self.diff_param_for_height = diff_param_for_height
