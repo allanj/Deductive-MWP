@@ -145,24 +145,24 @@ def process_obj(obj: Dict):
         type_str = "have square"
         return type_str, labels, gap
 
-    if have_both_m:
-        type_str = "have both m0, m1"
-        return type_str, labels, gap
+    # if have_both_m:
+    #     type_str = "have both m0, m1"
+    #     return type_str, labels, gap
 
 
-    have_same_variable = []
-    for idx, curr_labels in enumerate(labels):
-        if curr_labels[0] == curr_labels[1]:
-            have_same_variable.append(idx)
-    if len(have_same_variable) > 0:
-        if len(have_same_variable) == 1 and have_same_variable[0] == 0:
-            return "legal", labels, gap
-        else:
-            return "have same variable at multiple layer", labels, gap
+    # have_same_variable = []
+    # for idx, curr_labels in enumerate(labels):
+    #     if curr_labels[0] == curr_labels[1]:
+    #         have_same_variable.append(idx)
+    # if len(have_same_variable) > 0:
+    #     if len(have_same_variable) == 1 and have_same_variable[0] == 0:
+    #         return "legal", labels, gap
+    #     else:
+    #         return "have same variable at multiple layer", labels, gap
 
-    if have_multiple_m0(target_template):
-        type_str = "have mutiple m0"
-        return type_str, labels, gap
+    # if have_multiple_m0(target_template):
+    #     type_str = "have mutiple m0"
+    #     return type_str, labels, gap
 
 
 
@@ -174,7 +174,7 @@ def main():
     for in_file in ["train23k_processed.json", "valid23k_processed.json", "test23k_processed.json"]:
         print(f"working on... {in_file}")
         in_file = f"../data/math23k/{in_file}"
-        out_file = in_file.split(".json")[0] + "_replacement.json"
+        out_file = in_file.split(".json")[0] + "_all.json"
         data = read_data(in_file)
         count = Counter()
         inst_num_with_gap = 0
@@ -185,8 +185,8 @@ def main():
             count[type_str] += 1
             obj["type_str"] = type_str
             obj["equation_layer"] = labels
-            if type_str == "legal":
-                check_intermediate_m_in_order(labels)
+            # if type_str == "legal":
+            #     check_intermediate_m_in_order(labels)
         write_data(file=out_file, data = data)
 
         print(inst_num_with_gap)

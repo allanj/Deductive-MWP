@@ -7,7 +7,7 @@ import numpy as np
 from src.utils import read_data, write_data
 import collections
 import re
-from src.eval.utils import compute_value
+from src.eval.utils import compute_value, compute_value_for_incremental_equations
 import math
 from typing import Dict, List
 from collections import Counter
@@ -29,11 +29,13 @@ class UniversalDataset(Dataset):
                  number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
-                 constant_values: List[float] = None) -> None:
+                 constant_values: List[float] = None,
+                 use_incremental_labeling: bool = False) -> None:
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values
         self.constant_num = len(self.constant2id) if self.constant2id else 0
+        self.use_incremental_labeling = use_incremental_labeling
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -158,7 +160,10 @@ class UniversalDataset(Dataset):
                     var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
-            labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
+            if self.use_incremental_labeling:
+                labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
+            else:
+                labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
 
             if not labels:
                 num_has_same_var_m0 += 1
@@ -174,9 +179,17 @@ class UniversalDataset(Dataset):
                 num_index_error += 1
                 obj['type_str'] = "illegal"
                 continue
-            res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+            if self.use_incremental_labeling:
+                # if obj["id"] == '163':
+                #     print("sss")
+                res = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+            else:
+                res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
             try:
-                assert math.fabs(res - obj["answer"]) < 1e-4
+                if obj["answer"] > 1000000:
+                    assert math.fabs(res - obj["answer"]) < 200
+                else:
+                    assert math.fabs(res - obj["answer"]) < 1e-4
             except:
                 print("not equal")
             label_height_mask = [1] * len(labels)
@@ -198,6 +211,8 @@ class UniversalDataset(Dataset):
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}, num_index_error: {num_index_error}")
         print(num_step_count)
+        # out_file = file.split(".json")[0] + "_baseline.json"
+        # write_data(file=out_file, data= data)
 
     def __len__(self) -> int:
         return len(self._features)
@@ -253,23 +268,23 @@ class UniversalDataset(Dataset):
                 if self.constant2id is not None and left_var in self.constant2id:
                     left_var_idx = self.constant2id[left_var]
                 else:
-                    try:
-                        assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
-                    except:
-                        print("seohting")
+                    # try:
+                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    # except:
+                    #     print("seohting")
                     left_var_idx = (ord(left_var) - ord('a') + num_constant)
             else:
                 left_var_idx = -1
             right_var_idx = (ord(right_var) - ord('a') + num_constant) if self.constant2id is None or (right_var not in self.constant2id) else self.constant2id[right_var]
-            try:
-                assert right_var_idx >= 0
-            except:
-                print("right var index error")
-                return "right var index error"
-            try:
-                assert left_var_idx >= -1
-            except:
-                return "index error"
+            # try:
+            assert right_var_idx >= 0
+            # except:
+            #     print("right var index error")
+            #     return "right var index error"
+            # try:
+            assert left_var_idx >= -1
+            # except:
+            #     return "index error"
             if left_var_idx <= right_var_idx:
                 if left_var_idx == right_var_idx and op.endswith("_rev"):
                     op = op[:-4]
@@ -286,6 +301,88 @@ class UniversalDataset(Dataset):
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
+
+    def get_label_ids_incremental(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
+        # in this data, only have one or zero bracket
+        label_ids = []
+        num_constant = len(self.constant2id) if self.constant2id is not None else 0
+        for l_idx, layer in enumerate(equation_layers):
+            left_var, right_var, op = layer
+            if left_var == right_var and (not add_replacement):
+                return None
+            is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
+            if (not left_var.startswith("m")):
+                if self.constant2id is not None and left_var in self.constant2id:
+                    left_var_idx = self.constant2id[left_var] + l_idx
+                else:
+                    # try:
+                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    # except:
+                    #     print("seohting")
+                    left_var_idx = (ord(left_var) - ord('a') + num_constant + l_idx)
+            else:
+                m_idx = int(left_var[2:])
+                # left_var_idx = -1
+                left_var_idx = l_idx - m_idx
+            if (not right_var.startswith("m")):
+                if self.constant2id is not None and right_var in self.constant2id:
+                    right_var_idx = self.constant2id[right_var] + l_idx
+                else:
+                    assert ord(right_var) >= ord('a') and ord(right_var) <= ord('z')
+                    right_var_idx = (ord(right_var) - ord('a') + num_constant + l_idx)
+            else:
+                m_idx = int(right_var[2:])
+                # left_var_idx = -1
+                right_var_idx = l_idx - m_idx
+            # try:
+            assert right_var_idx >= 0
+            # except:
+            #     print("right var index error")
+            #     return "right var index error"
+            # try:
+            assert left_var_idx >= 0
+            # except:
+            #     return "index error"
+
+            if left_var.startswith("m_") or right_var.startswith("m_"):
+                if left_var.startswith("m_") and (not right_var.startswith("m_")):
+                    assert left_var_idx < right_var_idx
+                    op_idx = uni_labels.index(op)
+                    label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                elif not left_var.startswith("m_") and right_var.startswith("m_"):
+                    assert left_var_idx > right_var_idx
+                    op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                else:
+                    ## both starts with m
+                    if left_var_idx >= right_var_idx: ##left larger means left m_idx smaller
+                        op = op[:-4] if left_var_idx == right_var_idx and op.endswith("_rev") else op
+                        op_idx = uni_labels.index(op)
+                        label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                    else:
+                        if (op in ["+", "*"]):
+                            op_idx = uni_labels.index(op)
+                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                        else:
+                            # assert not op.endswith("_rev")
+                            op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+            else:
+                if left_var_idx <= right_var_idx:
+                    if left_var_idx == right_var_idx and op.endswith("_rev"):
+                        op = op[:-4]
+                    op_idx = uni_labels.index(op)
+                    label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                else:
+                    # left > right
+                    if (op in ["+", "*"]):
+                        op_idx = uni_labels.index(op)
+                        label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                    else:
+                        # assert not op.endswith("_rev")
+                        op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                        label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+        return label_ids
 
     def collate_function(self, batch: List[UniFeature]):
 
@@ -327,6 +424,18 @@ if __name__ == '__main__':
     # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
     constant2id = {"1": 0, "PI": 1}
     constant_values = [1.0, 3.14]
-    UniversalDataset(file="../../data/math23k/test23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
-    UniversalDataset(file="../../data/math23k/train23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
-    UniversalDataset(file="../../data/math23k/valid23k_processed_debug.json", tokenizer=tokenizer, constant2id=constant2id, constant_values=constant_values)
+    add_replacement = True
+    use_incremental_labeling = True
+    UniversalDataset(file="../../data/math23k/test23k_processed_all.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling)
+    UniversalDataset(file="../../data/math23k/train23k_processed_all.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling)
+    UniversalDataset(file="../../data/math23k/valid23k_processed_all.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling)
+
+    # UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
+    # UniversalDataset(file="../../data/math23k/train23k_processed_labeled.json", tokenizer=tokenizer)
+    # UniversalDataset(file="../../data/math23k/valid23k_processed_labeled.json", tokenizer=tokenizer)
