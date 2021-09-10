@@ -57,7 +57,7 @@ class GeneralModel(BertPreTrainedModel):
                 )
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
-
+        self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
         self.constant_num = constant_num
         self.constant_emb = None
         if self.constant_num > 0:
@@ -182,12 +182,18 @@ class GeneralModel(BertPreTrainedModel):
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
             else:
+                ## update hidden_state (gated hidden state)
+                init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable, hidden_size)
+                gru_inputs = var_hidden_states.view(-1, hidden_size)
+                var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable, hidden_size)
 
                 num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
                 ## 6x2 matrix
                 combination = torch.combinations(num_var_range, r=2, with_replacement=self.add_replacement)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i, combination=combination)
+
+
 
                 var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1) ## batch_size x (num_var + i) x hidden_size
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
