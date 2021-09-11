@@ -273,17 +273,13 @@ class UniversalModel(BertPreTrainedModel):
                     num_combinations, _ = combination.size()  # number_of_combinations x 2
                     batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i, combination=combination)
 
-                    var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states],
-                                                  dim=1)  ## batch_size x (num_var + i) x hidden_size
+                    var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
                     var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
                     expanded_var_comb_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size)
-                    mi_hidden_states = torch.cat(
-                        [expanded_var_comb_hidden_states[:, :, 0, :], expanded_var_comb_hidden_states[:, :, 1, :],
-                         expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]],
-                        dim=-1)
+                    mi_hidden_states = torch.cat( [expanded_var_comb_hidden_states[:, :, 0, :], expanded_var_comb_hidden_states[:, :, 1, :],
+                                            expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
                     mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
-                    mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, num_combinations, self.num_labels,
-                                                                          2)
+                    mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
                     mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                     mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
@@ -291,24 +287,24 @@ class UniversalModel(BertPreTrainedModel):
                     all_logits.append(mi_combined_logits)
                     best_temp_logits, best_stop_label = mi_combined_logits.max( dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
                     best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
-                    best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
+                    best_mi_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                     best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
 
                     b_idxs = [k for k in range(batch_size)]
                     ## NOTE: add loosss
                     if labels is not None and not is_eval:
-                        m0_gold_labels = labels[:, i, :]  ## batch_size x 4 (left_var_index, right_var_index, label_index, stop_id)
-                        m0_gold_comb = m0_gold_labels[:, :2].unsqueeze(1).expand(batch_size, num_combinations, 2)
+                        mi_gold_labels = labels[:, i, :]  ## batch_size x 4 (left_var_index, right_var_index, label_index, stop_id)
+                        mi_gold_comb = mi_gold_labels[:, :2].unsqueeze(1).expand(batch_size, num_combinations, 2)
                         batched_comb = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
-                        judge = m0_gold_comb == batched_comb
+                        judge = mi_gold_comb == batched_comb
                         judge = judge[:, :, 0] * judge[:, :, 1]  # batch_size, num_combinations
                         judge = judge.nonzero()[:, 1]  # batch_size
 
-                        mi_gold_scores = mi_combined_logits[b_idxs, judge, m0_gold_labels[:, 2], m0_gold_labels[:, 3]]  ## batch_size
+                        mi_gold_scores = mi_combined_logits[b_idxs, judge, mi_gold_labels[:, 2], mi_gold_labels[:, 3]]  ## batch_size
                         height_mask = label_height_mask[:, i]  ## batch_size
-                        current_loss = (best_m0_score - mi_gold_scores) * height_mask  ## avoid compute loss for unnecessary height
+                        current_loss = (best_mi_score - mi_gold_scores) * height_mask  ## avoid compute loss for unnecessary height
                         loss = loss + current_loss.sum()
-                        best_mi_label_rep = mi_label_rep[b_idxs, judge, m0_gold_labels[:, 2]]  ## teacher-forcing.
+                        best_mi_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]]  ## teacher-forcing.
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
 

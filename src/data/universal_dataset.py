@@ -132,6 +132,7 @@ class UniversalDataset(Dataset):
         num_index_error = 0
         numbert_instances_filtered = 0
         num_step_count = Counter()
+        num_empty_equation = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal":
                 numbert_instances_filtered += 1
@@ -160,6 +161,11 @@ class UniversalDataset(Dataset):
                     var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
+            if len(obj["equation_layer"])  == 0:
+                num_empty_equation += 1
+                obj['type_str'] = "empty eqution"
+                continue
+
             if self.use_incremental_labeling:
                 labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
             else:
@@ -191,7 +197,7 @@ class UniversalDataset(Dataset):
                 else:
                     assert math.fabs(res - obj["answer"]) < 1e-4
             except:
-                print("not equal")
+                print("not equal", flush=True)
             label_height_mask = [1] * len(labels)
             num_step_count[len(labels)] += 1
 
@@ -208,7 +214,7 @@ class UniversalDataset(Dataset):
                            label_height_mask=label_height_mask)
             )
             self.insts.append(obj)
-        print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
+        print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}, num_index_error: {num_index_error}")
         print(num_step_count)
         # out_file = file.split(".json")[0] + "_baseline.json"
@@ -358,7 +364,9 @@ class UniversalDataset(Dataset):
                     if left_var_idx >= right_var_idx: ##left larger means left m_idx smaller
                         op = op[:-4] if left_var_idx == right_var_idx and op.endswith("_rev") else op
                         op_idx = uni_labels.index(op)
-                        label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                        if left_var_idx > right_var_idx and (op not in ["+", "*"]):
+                            op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                        label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                     else:
                         if (op in ["+", "*"]):
                             op_idx = uni_labels.index(op)
@@ -389,6 +397,7 @@ class UniversalDataset(Dataset):
         max_wordpiece_length = max([len(feature.input_ids)  for feature in batch])
         max_num_variable = max([feature.num_variables  for feature in batch])
         max_height = max([len(feature.labels) for feature in batch])
+        padding_value = [-1, 0, 0, 0] if not self.use_incremental_labeling else [0,0,0,0]
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -400,7 +409,7 @@ class UniversalDataset(Dataset):
             variable_index_mask = feature.variable_index_mask + [0] * padded_variable_idx_len
 
             padded_height = max_height - len(feature.labels)
-            labels = feature.labels + [[-1, 0, 0, 0]]* padded_height ## useless, because we have height mask
+            labels = feature.labels + [padding_value]* padded_height ## useless, because we have height mask
             label_height_mask = feature.label_height_mask + [0] * padded_height
 
 

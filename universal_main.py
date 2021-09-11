@@ -163,8 +163,8 @@ def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.Float
     device = feature.variable_indexs_start.device
     batched_prediction = [[] for _ in range(batch_size)]
     for k, logits in enumerate(all_logits):
-        max_num_variable = max_num_variable + constant_num + k
-        num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
+        current_max_num_variable = max_num_variable + constant_num + k
+        num_var_range = torch.arange(0, current_max_num_variable, device=feature.variable_indexs_start.device)
         combination = torch.combinations(num_var_range, r=2, with_replacement=add_replacement)  ##number_of_combinations x 2
         num_combinations, _ = combination.size()
 
