@@ -71,9 +71,15 @@ def compute_value_for_incremental_equations(equations, num_list, num_constant, c
         store_values.append(current_value)
     return current_value
 
-def is_value_correct(predictions, labels, num_list, num_constant, constant_values: List[float] = None):
-    pred_val = compute_value(predictions, num_list, num_constant, constant_values)
-    gold_val = compute_value(labels, num_list, num_constant, constant_values)
+def is_value_correct(predictions, labels, num_list, num_constant, constant_values: List[float] = None, consider_multiple_m0=False):
+    if consider_multiple_m0:
+        pred_val = compute_value_for_incremental_equations(predictions, num_list, num_constant, constant_values)
+    else:
+        pred_val = compute_value(predictions, num_list, num_constant, constant_values)
+    if consider_multiple_m0:
+        gold_val = compute_value_for_incremental_equations(labels, num_list, num_constant, constant_values)
+    else:
+        gold_val = compute_value(labels, num_list, num_constant, constant_values)
     if math.fabs((gold_val- pred_val)) < 1e-4:
         return True
     else:

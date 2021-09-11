@@ -37,9 +37,9 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--dev_file', type=str, default="data/complex/mwp_processed_test.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
-    parser.add_argument('--use_constant', default=0, type=int, choices=[0,1], help="whether to use constant 1 and pi")
+    parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
 
-    parser.add_argument('--add_replacement', default=0, type=int, choices=[0,1], help = "use replacement when computing combinations")
+    parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
 
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
@@ -47,8 +47,9 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--bert_folder', type=str, default="hfl", help="The folder name that contains the BERT model")
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
-    parser.add_argument('--diff_param_for_height', type=int, default=1, choices=[0,1])
-    parser.add_argument('--height', type=int, default=4, help="the model height")
+    parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
+    parser.add_argument('--height', type=int, default=6, help="the model height")
+    parser.add_argument('--consider_multiple_m0', type=int, default=0, help="whether or not to consider multiple m0")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -88,7 +89,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
-                                           add_replacement=bool(config.add_replacement)).to(dev)
+                                           add_replacement=bool(config.add_replacement),
+                                           consider_multiple_m0=bool(config.consider_multiple_m0)).to(dev)
     if config.parallel:
         model = nn.DataParallel(model)
 
@@ -135,7 +137,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
         if valid_dataloader is not None:
             performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values,
-                                   add_replacement=bool(config.add_replacement))
+                                   add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0))
             if performance > best_performance:
                 print(f"[Model Info] Saving the best model... with performance {performance}..")
                 best_performance = performance
@@ -148,15 +150,82 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
-                                           add_replacement=bool(config.add_replacement)).to(dev)
+                                           add_replacement=bool(config.add_replacement),
+                                           consider_multiple_m0=bool(config.consider_multiple_m0)).to(dev)
     if config.fp16:
         model.half()
         model.save_pretrained(f"model_files/{config.model_folder}")
         tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     return model
 
+def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.FloatTensor, constant_num: int, add_replacement: bool = False):
+    batch_size, max_num_variable = feature.variable_indexs_start.size()
+    device = feature.variable_indexs_start.device
+    batched_prediction = [[] for _ in range(batch_size)]
+    for k, logits in enumerate(all_logits):
+        max_num_variable = max_num_variable + constant_num + k
+        num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
+        combination = torch.combinations(num_var_range, r=2, with_replacement=add_replacement)  ##number_of_combinations x 2
+        num_combinations, _ = combination.size()
+
+        best_temp_logits, best_temp_stop_label = logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
+        best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
+        best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
+        best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
+        b_idxs = [bidx for bidx in range(batch_size)]
+        best_stop_label = best_temp_stop_label[b_idxs, best_comb, best_label] ## batch size
+
+        # batch_size x 2
+        best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
+                                          best_comb.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, 2).to(device)).squeeze(1)
+        best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
+        best_labels = best_label.cpu().numpy()
+        curr_best_stop_labels = best_stop_label.cpu().numpy()
+        for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)):  ## within each instances:
+            left, right = best_comb_idx
+            curr_label = [left, right, best_label, stop_label]
+            batched_prediction[b_idx].append(curr_label)
+    return batched_prediction
+
+
+def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num: int, add_replacement: bool = False):
+    batch_size, max_num_variable = feature.variable_indexs_start.size()
+    max_num_variable = max_num_variable + constant_num
+    num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
+    combination = torch.combinations(num_var_range, r=2, with_replacement=add_replacement)  ##number_of_combinations x 2
+    num_combinations, _ = combination.size()
+    batched_prediction = [[] for _ in range(batch_size)]
+    for k, logits in enumerate(all_logits):
+        best_temp_logits, best_temp_stop_label = logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
+        best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
+        best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
+        best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
+        b_idxs = [bidx for bidx in range(batch_size)]
+        best_stop_label = best_temp_stop_label[b_idxs, best_comb, best_label]
+        if k == 0:
+            # batch_size x 2
+            best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
+                                              best_comb.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, 2).to(
+                                                  feature.variable_indexs_start.device)).squeeze(1)
+        else:
+            # batch_size
+            best_comb_var_idxs = best_comb
+        best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
+        best_labels = best_label.cpu().numpy()
+        curr_best_stop_labels = best_stop_label.cpu().numpy()
+        for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(
+                zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)):  ## within each instances:
+            if isinstance(best_comb_idx, np.int64):
+                right = best_comb_idx
+                left = -1
+            else:
+                left, right = best_comb_idx
+            curr_label = [left, right, best_label, stop_label]
+            batched_prediction[b_idx].append(curr_label)
+    return batched_prediction
+
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List,
-             add_replacement: bool = False, res_file: str= None, err_file:str = None) -> float:
+             add_replacement: bool = False, consider_multiple_m0: bool = False, res_file: str= None, err_file:str = None) -> float:
     model.eval()
     predictions = []
     labels = []
@@ -172,37 +241,8 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True, is_eval=True).all_logits
-                batch_size, max_num_variable = feature.variable_indexs_start.size()
-                max_num_variable = max_num_variable + constant_num
-                num_var_range = torch.arange(0, max_num_variable, device=feature.variable_indexs_start.device)
-                combination = torch.combinations(num_var_range, r=2, with_replacement=add_replacement)  ##number_of_combinations x 2
-                num_combinations, _ = combination.size()
-                batched_prediction = [[] for _ in range(batch_size)]
-                for k, logits in enumerate(all_logits):
-                    best_temp_logits, best_temp_stop_label = logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
-                    best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
-                    best_m0_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
-                    best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
-                    b_idxs = [k for k in range(batch_size)]
-                    best_stop_label = best_temp_stop_label[b_idxs, best_comb, best_label]
-                    if k == 0:
-                        # batch_size x 2
-                        best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
-                                     best_comb.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, 2).to(feature.variable_indexs_start.device)).squeeze(1)
-                    else:
-                        # batch_size
-                        best_comb_var_idxs = best_comb
-                    best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
-                    best_labels = best_label.cpu().numpy()
-                    curr_best_stop_labels = best_stop_label.cpu().numpy()
-                    for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)): ## within each instances:
-                        if isinstance(best_comb_idx, np.int64):
-                            right = best_comb_idx
-                            left = -1
-                        else:
-                            left, right = best_comb_idx
-                        curr_label = [left, right, best_label, stop_label]
-                        batched_prediction[b_idx].append(curr_label)
+                batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
+                    if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
                 ## post process remve extra
                 for b, inst_predictions in enumerate(batched_prediction):
                     for p, prediction_step in enumerate(inst_predictions):
@@ -245,7 +285,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     num_label_step_val_corr = Counter()
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
-        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values)
+        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
         val_corr += 1 if is_value_corr else 0
         if is_value_corr:
             num_label_step_val_corr[len(inst_labels)] += 1
@@ -257,7 +297,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         curr_val_corr = num_label_step_val_corr[key]
         curr_total = num_label_step_total[key]
         print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total}) val acc: {curr_val_corr*1.0/curr_total * 100:.2f} ({curr_val_corr}/{curr_total})", flush=True)
-    return acc
+    return val_acc
 
 def main():
     parser = argparse.ArgumentParser(description="classificaton")
@@ -284,10 +324,12 @@ def main():
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
         dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps,
-                                   constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement))
+                                   constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0))
         print("[Data Info] Reading validation data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
-                                        constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement))
+                                        constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0))
 
 
         # Prepare data loader
@@ -304,7 +346,7 @@ def main():
                       valid_dataloader = valid_dataloader,
                       dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
                       constant_values=constant_values)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0))
     else:
         print(f"Testing the model now.")
         model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}",
@@ -312,7 +354,7 @@ def main():
                                                diff_param_for_height=conf.diff_param_for_height,
                                                height = conf.height,
                                                constant_num = constant_number,
-                                            add_replacement=bool(conf.add_replacement)).to(conf.device)
+                                            add_replacement=bool(conf.add_replacement), use_incremental_labeling=conf.consider_multiple_m0).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement))
@@ -320,7 +362,8 @@ def main():
                                       collate_fn=eval_dataset.collate_function)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement),
+                 consider_multiple_m0=bool(conf.consider_multiple_m0))
 
 if __name__ == "__main__":
     main()

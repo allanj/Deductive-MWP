@@ -39,6 +39,7 @@ class Config:
         self.bert_folder = args.bert_folder
         self.diff_param_for_height = args.diff_param_for_height
         self.height = args.height
+        self.consider_multiple_m0 = args.consider_multiple_m0
 
         self.use_constant = args.use_constant
         self.add_replacement = args.add_replacement
