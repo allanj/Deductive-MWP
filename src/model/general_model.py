@@ -183,9 +183,9 @@ class GeneralModel(BertPreTrainedModel):
                     best_mi_label_rep = best_m0_label_rep
             else:
                 ## update hidden_state (gated hidden state)
-                init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable, hidden_size)
+                init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
                 gru_inputs = var_hidden_states.view(-1, hidden_size)
-                var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable, hidden_size)
+                var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
 
                 num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
                 ## 6x2 matrix
@@ -222,9 +222,10 @@ class GeneralModel(BertPreTrainedModel):
                     judge = judge[:, :, 0] * judge[:, :, 1]  # batch_size, num_combinations
                     judge = judge.nonzero()[:, 1]  # batch_size
 
-                    m0_gold_scores = mi_combined_logits[b_idxs, judge, m0_gold_labels[:, 2], m0_gold_labels[:, 3]]  ## batch_size
-                    loss = loss + (best_m0_score - m0_gold_scores).sum()
-
+                    mi_gold_scores = mi_combined_logits[b_idxs, judge, m0_gold_labels[:, 2], m0_gold_labels[:, 3]]  ## batch_size
+                    height_mask = label_height_mask[:, i]  ## batch_size
+                    current_loss = (best_m0_score - mi_gold_scores) * height_mask ## avoid compute loss for unnecessary height
+                    loss = loss + current_loss.sum()
                     best_mi_label_rep = mi_label_rep[b_idxs, judge, m0_gold_labels[:, 2]]  ## teacher-forcing.
                 else:
                     best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
@@ -234,7 +235,13 @@ class GeneralModel(BertPreTrainedModel):
 
 
 def test_case_batch_two():
-    model = GeneralModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=2)
+    import random
+    import numpy as np
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    model = GeneralModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=0, add_replacement=True, height=4)
+    model.eval()
     from transformers import BertTokenizer
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     uni_labels = [
@@ -256,13 +263,13 @@ def test_case_batch_two():
     labels = torch.tensor([
         [
             [
-                0, 1, uni_labels.index('/_rev'), 0
+                0, 1, uni_labels.index('/_rev'), 1
             ],
             [
-                -1, 2, 1, 1 ## 3 means, for this one, we directly forward
+                0, 0, 0, 0 ## 3 means, for this one, we directly forward
             ],
             [
-                -1, 0, 0, 0 ## 3 means, for this one, we directly forward
+                0, 0, 0, 0 ## 3 means, for this one, we directly forward
             ]
         ],
         [
@@ -270,20 +277,20 @@ def test_case_batch_two():
                 0, 1, uni_labels.index('-'), 0
             ],
             [
-                -1, 2, uni_labels.index('+'), 0
+                0, 3, uni_labels.index('+'), 1
             ],
             [
-                -1, 3, 0, 1 ## 3 means, for this one, we directly forward
+                0, 0, 0, 0 ## 3 means, for this one, we directly forward
             ]
         ]
     ])
     label_height_mask = torch.tensor(
         [
             [
-                1, 1, 0
+                1, 0, 0
             ],
             [
-                1, 1, 1
+                1, 1, 0
             ]
         ]
     )
