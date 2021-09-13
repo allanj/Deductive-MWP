@@ -21,6 +21,8 @@ class Config:
 
         self.num_workers = 8 ## workers
 
+        self.add_new_token = args.add_new_token
+
         # optimizer hyperparameter
         self.learning_rate = args.learning_rate
         self.max_grad_norm = args.max_grad_norm

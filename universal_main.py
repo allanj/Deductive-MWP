@@ -33,13 +33,15 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--dev_num', type=int, default=-1, help="The number of development data, -1 means all data")
 
 
-    parser.add_argument('--train_file', type=str, default="data/complex/mwp_processed_train.json")
-    parser.add_argument('--dev_file', type=str, default="data/complex/mwp_processed_test.json")
+    parser.add_argument('--train_file', type=str, default="data/math23k/train23k_processed_all.json")
+    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_processed_all.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
 
     parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
+
+    parser.add_argument('--add_new_token', default=0, type=int, choices=[0, 1], help="whether or not to add the new token")
 
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
@@ -48,8 +50,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
     parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
-    parser.add_argument('--height', type=int, default=6, help="the model height")
-    parser.add_argument('--consider_multiple_m0', type=int, default=0, help="whether or not to consider multiple m0")
+    parser.add_argument('--height', type=int, default=10, help="the model height")
+    parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -91,6 +93,13 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            constant_num=constant_num,
                                            add_replacement=bool(config.add_replacement),
                                            consider_multiple_m0=bool(config.consider_multiple_m0)).to(dev)
+    if config.add_new_token:
+        model.resize_token_embeddings(len(tokenizer))
+        if model.config.tie_word_embeddings:
+            model.tie_weights()
+        print(f"[Info] Added new tokens <NUM> for grading purpose, after: {len(tokenizer)}")
+
+
     if config.parallel:
         model = nn.DataParallel(model)
 
@@ -283,13 +292,20 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     ##value accuarcy
     val_corr = 0
     num_label_step_val_corr = Counter()
+    err = []
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
-        is_value_corr = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
+        is_value_corr, predict_value, gold_value, pred_ground_equation, gold_ground_equation = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
         val_corr += 1 if is_value_corr else 0
         if is_value_corr:
             num_label_step_val_corr[len(inst_labels)] += 1
             corr += 1
+        else:
+            err.append(inst)
+        inst["predict_value"] = predict_value
+        inst["gold_value"] = gold_value
+        inst['pred_ground_equation'] = pred_ground_equation
+        inst['gold_ground_equation'] = gold_ground_equation
     val_acc = val_corr*1.0 / total
     print(f"[Info] val Acc.:{val_acc * 100:.2f} ", flush=True)
     for key in num_label_step_total:
@@ -297,6 +313,10 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         curr_val_corr = num_label_step_val_corr[key]
         curr_total = num_label_step_total[key]
         print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total}) val acc: {curr_val_corr*1.0/curr_total * 100:.2f} ({curr_val_corr}/{curr_total})", flush=True)
+    if res_file is not None:
+        write_data(file=res_file, data=insts)
+    if err_file is not None:
+        write_data(file=err_file, data=err)
     return val_acc
 
 def main():
@@ -310,6 +330,10 @@ def main():
     num_labels = 6
 
     tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
+
+    if conf.add_new_token:
+        print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
+        tokenizer.add_tokens('<NUM>', special_tokens=True)
 
     if conf.use_constant:
         constant2id = {"1": 0, "PI": 1}
@@ -325,11 +349,11 @@ def main():
         print("[Data Info] Reading training data", flush=True)
         dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0))
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
         print("[Data Info] Reading validation data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0))
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
 
 
         # Prepare data loader
@@ -354,16 +378,18 @@ def main():
                                                diff_param_for_height=conf.diff_param_for_height,
                                                height = conf.height,
                                                constant_num = constant_number,
-                                            add_replacement=bool(conf.add_replacement), use_incremental_labeling=conf.consider_multiple_m0).to(conf.device)
+                                            add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
-                                        constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement))
+                                        constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
+                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
+        os.makedirs("results", exist_ok=True)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                 consider_multiple_m0=bool(conf.consider_multiple_m0))
+                 consider_multiple_m0=bool(conf.consider_multiple_m0), res_file=res_file, err_file=err_file)
 
 if __name__ == "__main__":
     main()

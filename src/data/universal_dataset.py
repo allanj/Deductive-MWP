@@ -30,12 +30,14 @@ class UniversalDataset(Dataset):
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
                  constant_values: List[float] = None,
-                 use_incremental_labeling: bool = False) -> None:
+                 use_incremental_labeling: bool = False,
+                 add_new_token: bool = False) -> None:
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values
         self.constant_num = len(self.constant2id) if self.constant2id else 0
         self.use_incremental_labeling = use_incremental_labeling
+        self.add_new_token = add_new_token
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -155,10 +157,26 @@ class UniversalDataset(Dataset):
             tokens = tokenizer.convert_ids_to_tokens(input_ids)
             var_starts = []
             var_ends = []
-            for k, token in enumerate(tokens):
-                if token == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
-                    var_starts.append(k)
-                    var_ends.append(k+4)
+            if self.add_new_token:
+                new_tokens = []
+                k = 0
+                while k < len(tokens):
+                    curr_tok = tokens[k]
+                    if curr_tok == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
+                        new_tokens.append('<NUM>')
+                        var_starts.append(len(new_tokens))
+                        var_ends.append(len(new_tokens))
+                        k = k+4
+                    else:
+                        new_tokens.append(curr_tok)
+                    k+=1
+                input_ids = tokenizer.convert_tokens_to_ids(new_tokens)
+                attention_mask = [1] * len(input_ids)
+            else:
+                for k, token in enumerate(tokens):
+                    if token == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
+                        var_starts.append(k)
+                        var_ends.append(k+4)
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
             if len(obj["equation_layer"])  == 0:
@@ -188,7 +206,7 @@ class UniversalDataset(Dataset):
             if self.use_incremental_labeling:
                 # if obj["id"] == '163':
                 #     print("sss")
-                res = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
             else:
                 res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
             try:

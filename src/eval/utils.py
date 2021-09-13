@@ -44,6 +44,7 @@ def compute_value(equations, num_list, num_constant, constant_values: List[float
 def compute_value_for_incremental_equations(equations, num_list, num_constant, constant_values: List[float] = None):
     current_value = 0
     store_values = []
+    grounded_equations = []
     for eq_idx, equation in enumerate(equations):
         left_var_idx, right_var_idx, op_idx, _ = equation
         assert left_var_idx >= 0
@@ -68,19 +69,22 @@ def compute_value_for_incremental_equations(equations, num_list, num_constant, c
 
         op = uni_labels[op_idx]
         current_value = compute(left_number, right_number, op)
+        grounded_equations.append([left_number, right_number, op, current_value])
         store_values.append(current_value)
-    return current_value
+    return current_value, grounded_equations
 
 def is_value_correct(predictions, labels, num_list, num_constant, constant_values: List[float] = None, consider_multiple_m0=False):
+    pred_grounded_equations = None
+    gold_grounded_equations = None
     if consider_multiple_m0:
-        pred_val = compute_value_for_incremental_equations(predictions, num_list, num_constant, constant_values)
+        pred_val, pred_grounded_equations = compute_value_for_incremental_equations(predictions, num_list, num_constant, constant_values)
     else:
         pred_val = compute_value(predictions, num_list, num_constant, constant_values)
     if consider_multiple_m0:
-        gold_val = compute_value_for_incremental_equations(labels, num_list, num_constant, constant_values)
+        gold_val, gold_grounded_equations = compute_value_for_incremental_equations(labels, num_list, num_constant, constant_values)
     else:
         gold_val = compute_value(labels, num_list, num_constant, constant_values)
     if math.fabs((gold_val- pred_val)) < 1e-4:
-        return True
+        return True, pred_val, gold_val, pred_grounded_equations, gold_grounded_equations
     else:
-        return False
+        return False, pred_val, gold_val, pred_grounded_equations, gold_grounded_equations

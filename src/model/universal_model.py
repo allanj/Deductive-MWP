@@ -158,9 +158,13 @@ class UniversalModel(BertPreTrainedModel):
 
         _, max_num_variable = variable_indexs_start.size()
 
-        var_start_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_start.unsqueeze(-1).expand(batch_size, max_num_variable,  hidden_size))
-        var_end_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_end.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
-        var_hidden_states = var_start_hidden_states + var_end_hidden_states
+        var_sum = (variable_indexs_start - variable_indexs_end).sum() ## if add <NUM>, we can just choose one as hidden_states
+        var_start_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_start.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
+        if var_sum != 0:
+            var_end_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_end.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
+            var_hidden_states = var_start_hidden_states + var_end_hidden_states
+        else:
+            var_hidden_states= var_start_hidden_states
         if self.constant_num > 0:
             constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
             var_hidden_states = torch.cat([constant_hidden_states, var_hidden_states], dim=1)
