@@ -322,11 +322,12 @@ class UniversalModel(BertPreTrainedModel):
 
                     current_comb_judge = current_expanded_combination == current_all_previous_best_comb
                     current_comb_judge = current_comb_judge[:, :, :, 0] * current_comb_judge[:, :, :, 1]  # batch_size, i, num_combinations
-                    best_prev2curr_comb = current_comb_judge.nonzero()[:, 2] # batch_size * i
-
-                    current_all_previous_best_labels = torch.cat(all_previous_best_label, dim=0)
+                    best_prev2curr_comb = current_comb_judge.nonzero()[:, 2] # batch_size * i ## be careful about this
+                    ## because the `best_prev2curr_comb` is like [b11, b12, b21, b22] but not [b11, b21, b12, b22]
+                    # so we have to use repeat_interleave and stack the labe
+                    current_all_previous_best_labels = torch.stack(all_previous_best_label, dim=1).view(-1)
                     current_mask = current_mask.contiguous()
-                    current_mask[b_idxs.repeat(i), best_prev2curr_comb, current_all_previous_best_labels, :] = 0
+                    current_mask[b_idxs.repeat_interleave(i), best_prev2curr_comb, current_all_previous_best_labels, :] = 0
 
                     mi_logits = mi_logits + current_mask.log()
 
