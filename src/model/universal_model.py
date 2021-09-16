@@ -100,8 +100,15 @@ class UniversalModel(BertPreTrainedModel):
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.variable_gru = None
-        if self.consider_multiple_m0:
-            self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+        # self.step_transformation = None
+        # if self.consider_multiple_m0:
+        #     self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+            # self.step_transformation = nn.Sequential(
+            #         nn.Linear(2 * config.hidden_size, config.hidden_size),
+            #         nn.ReLU(),
+            #         nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+            #         nn.Dropout(config.hidden_dropout_prob)
+            #     )
         self.constant_num = constant_num
         self.constant_emb = None
         if self.constant_num > 0:
@@ -176,6 +183,9 @@ class UniversalModel(BertPreTrainedModel):
         best_mi_label_rep = None
         loss = 0
         all_logits = []
+        b_idxs = torch.arange(0, batch_size)
+        all_previous_best_comb = []
+        all_previous_best_label = []
         for i in range(max_height):
             linear_modules = self.linears[i] if self.diff_param_for_height else self.linears
             if i == 0:
@@ -210,7 +220,7 @@ class UniversalModel(BertPreTrainedModel):
                 best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
                 best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
 
-                b_idxs = [k for k in range(batch_size)]
+                # b_idxs = [k for k in range(batch_size)]
                 # best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
                 # best_mi_label_rep = best_m0_label_rep
                 ## NOTE: add loosss
@@ -226,9 +236,15 @@ class UniversalModel(BertPreTrainedModel):
                     loss = loss +  (best_m0_score - m0_gold_scores).sum()
 
                     best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]] ## teacher-forcing.
+                    best_comb = judge
+                    best_label = m0_gold_labels[:, 2]
                 else:
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
+                expanded_previous_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
+                previous_best_comb = torch.gather(expanded_previous_combinations, 1, best_comb.unsqueeze(-1).unsqueeze(-1).expand(batch_size, 1, 2))
+                all_previous_best_comb.append(previous_best_comb)
+                all_previous_best_label.append(best_label)
             else:
                 if not self.consider_multiple_m0:
                     # best_mi_label_rep = self.intermediate_transformation(best_mi_label_rep)
@@ -266,16 +282,26 @@ class UniversalModel(BertPreTrainedModel):
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 else:
+                    # expanded_previous_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
+                    # previous_best_comb = torch.gather(expanded_previous_combinations, 1, best_comb.unsqueeze(-1).unsqueeze(-1).expand(batch_size, 1, 2)) + 1
+
                     ## update hidden_state (gated hidden state)
-                    init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
-                    gru_inputs = var_hidden_states.view(-1, hidden_size)
-                    var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+                    # init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
+                    # gru_inputs = var_hidden_states.view(-1, hidden_size)
+                    # var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+
+                    # expanded_best_mi_label = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size)
+                    # step_candidate = torch.cat([expanded_best_mi_label, var_hidden_states], dim=-1)
+                    # var_hidden_states = self.step_transformation(step_candidate)
 
                     num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
                     ## 6x2 matrix
                     combination = torch.combinations(num_var_range, r=2,  with_replacement=self.add_replacement)  ##number_of_combinations x 2
                     num_combinations, _ = combination.size()  # number_of_combinations x 2
+                    # batch_size x num_combinations
                     batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i, combination=combination)
+
+                    # b_idxs = torch.arange(0, batch_size)
 
                     var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
                     var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
@@ -284,7 +310,25 @@ class UniversalModel(BertPreTrainedModel):
                                             expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
                     mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
                     mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
-                    mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                    current_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
+
+
+                    current_all_previous_best_comb = torch.stack(all_previous_best_comb, dim=1) ## (batch_size, i, 1 ,2)
+                    incremental_idx = torch.arange(i, 0, -1, device=variable_indexs_start.device).\
+                        unsqueeze(0).unsqueeze(-1).unsqueeze(-1).expand(batch_size, i, 1, 2) ## i, i-1, i-2, ..., 1
+                    current_all_previous_best_comb = current_all_previous_best_comb + incremental_idx
+                    current_expanded_combination = combination.unsqueeze(0).unsqueeze(1).expand(batch_size, i, num_combinations, 2)
+                    current_all_previous_best_comb = current_all_previous_best_comb.expand(batch_size, i, num_combinations, 2)
+
+                    current_comb_judge = current_expanded_combination == current_all_previous_best_comb
+                    current_comb_judge = current_comb_judge[:, :, :, 0] * current_comb_judge[:, :, :, 1]  # batch_size, i, num_combinations
+                    best_prev2curr_comb = current_comb_judge.nonzero()[:, 2] # batch_size * i
+
+                    current_all_previous_best_labels = torch.cat(all_previous_best_label, dim=0)
+                    current_mask = current_mask.contiguous()
+                    current_mask[b_idxs.repeat(i), best_prev2curr_comb, current_all_previous_best_labels, :] = 0
+
+                    mi_logits = mi_logits + current_mask.log()
 
                     mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
                     mi_combined_logits = mi_logits + mi_stopper_logits
@@ -294,7 +338,7 @@ class UniversalModel(BertPreTrainedModel):
                     best_mi_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                     best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
 
-                    b_idxs = [k for k in range(batch_size)]
+
                     ## NOTE: add loosss
                     if labels is not None and not is_eval:
                         mi_gold_labels = labels[:, i, :]  ## batch_size x 4 (left_var_index, right_var_index, label_index, stop_id)
@@ -309,8 +353,14 @@ class UniversalModel(BertPreTrainedModel):
                         current_loss = (best_mi_score - mi_gold_scores) * height_mask  ## avoid compute loss for unnecessary height
                         loss = loss + current_loss.sum()
                         best_mi_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]]  ## teacher-forcing.
+                        best_comb = judge
+                        best_label = mi_gold_labels[:, 2]
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
+                    expanded_previous_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
+                    previous_best_comb = torch.gather(expanded_previous_combinations, 1, best_comb.unsqueeze(-1).unsqueeze(-1).expand(batch_size, 1, 2))
+                    all_previous_best_comb.append(previous_best_comb)
+                    all_previous_best_label.append(best_label)
 
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
