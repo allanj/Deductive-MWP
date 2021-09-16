@@ -184,6 +184,16 @@ class UniversalDataset(Dataset):
                 obj['type_str'] = "empty eqution"
                 continue
 
+            ##check duplication for (non-duplicated dataset, i.e., no same equation)
+            if "nodup" in file:
+                eq_set = set()
+                for equation in obj["equation_layer"]:
+                    eq_set.add(' '.join(equation))
+                try:
+                    assert len(eq_set) == len(obj["equation_layer"])
+                except:
+                    print("[WARNING] [Probably ERROR] find duplication")
+
             if self.use_incremental_labeling:
                 labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
             else:
@@ -453,15 +463,15 @@ if __name__ == '__main__':
     constant_values = [1.0, 3.14]
     add_replacement = True
     use_incremental_labeling = True
-    UniversalDataset(file="../../data/math23k/test23k_processed_all.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling)
-    UniversalDataset(file="../../data/math23k/train23k_processed_all.json", tokenizer=tokenizer,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling)
-    UniversalDataset(file="../../data/math23k/valid23k_processed_all.json", tokenizer=tokenizer,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
     # UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
     # UniversalDataset(file="../../data/math23k/train23k_processed_labeled.json", tokenizer=tokenizer)

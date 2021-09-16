@@ -48,23 +48,41 @@ def have_multiple_m0(target_template: List):
             return True
     return False
 
-def get_labels(target_norm_post_template: List, target_template: List):
+def check_in_labels(current_tuple, labels):
+    if current_tuple in labels:
+        return current_tuple
+    if current_tuple[-1] in {'+', '*'} and [current_tuple[1], current_tuple[0], current_tuple[-1]] in labels:
+        return [current_tuple[1], current_tuple[0], current_tuple[-1]]
+    return None
+
+def get_labels(target_norm_post_template: List, target_template: List, remove_duplicate: bool = False):
     assert target_norm_post_template[:2] == ["x", "="]
     stack = []
     pointer = 2
     labels = []
     both_m = False
+    eq_2_m = {}
     while pointer != len(target_norm_post_template):
         stack.append(target_norm_post_template[pointer])
         if stack[-1] in {'+', '-', '*', '/', '^'}:
             if len(stack[-3:]) == 3:
                 if stack[-3].startswith("m") and stack[-2].startswith("m"):
                     both_m = True
-                labels.append([stack[-3], stack[-2], stack[-1]])
+                if remove_duplicate:
+                    checker = check_in_labels([stack[-3], stack[-2], stack[-1]], labels)
+                    if checker:
+                        m_string = eq_2_m[' '.join(checker)]
+                    else:
+                        labels.append([stack[-3], stack[-2], stack[-1]])
+                        m_string = f"m_{len(labels)}"
+                        eq_2_m[' '.join([stack[-3], stack[-2], stack[-1]])] = m_string
+                else:
+                    labels.append([stack[-3], stack[-2], stack[-1]])
+                    m_string = f"m_{len(labels)}"
                 stack.pop()
                 stack.pop()
                 stack.pop()
-                stack.append(f"m_{len(labels)}")
+                stack.append(m_string)
         pointer += 1
     for i, (left, right, op) in enumerate(labels):
         # left = left[-1:] if left.startswith("temp_") else left
@@ -121,10 +139,10 @@ def check_intermediate_m_in_order(labels: List[List[str]]):
     return True
 
 
-def process_obj(obj: Dict):
+def process_obj(obj: Dict, remove_duplicate: bool = False):
     target_template = [val.strip() for val in obj["target_template"]]
 
-    labels, have_both_m, gap = get_labels(obj["target_norm_post_template"], obj["target_template"])
+    labels, have_both_m, gap = get_labels(obj["target_norm_post_template"], obj["target_template"], remove_duplicate)
     type_str = "legal"
 
     if count_variable(target_template) > 7: ## only 2 in test
@@ -171,15 +189,19 @@ def process_obj(obj: Dict):
     return type_str, labels, gap
 
 def main():
+    remove_duplicate = False
     for in_file in ["train23k_processed.json", "valid23k_processed.json", "test23k_processed.json"]:
         print(f"working on... {in_file}")
         in_file = f"../data/math23k/{in_file}"
-        out_file = in_file.split(".json")[0] + "_all.json"
+        if remove_duplicate:
+            out_file = in_file.split(".json")[0] + "_nodup.json"
+        else:
+            out_file = in_file.split(".json")[0] + "_all.json"
         data = read_data(in_file)
         count = Counter()
         inst_num_with_gap = 0
         for obj in tqdm(data, desc="processing data", total=len(data)):
-            type_str, labels, gap = process_obj(obj)
+            type_str, labels, gap = process_obj(obj, remove_duplicate=remove_duplicate)
             if gap > 0:
                 inst_num_with_gap += 1
             count[type_str] += 1
