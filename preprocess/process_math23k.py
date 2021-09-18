@@ -57,6 +57,10 @@ def check_in_labels(current_tuple, labels):
 
 def get_labels(target_norm_post_template: List, target_template: List, remove_duplicate: bool = False):
     assert target_norm_post_template[:2] == ["x", "="]
+    if len(target_norm_post_template) == 3:
+        assert target_norm_post_template[2].startswith("temp_")
+        target_norm_post_template.append("1")
+        target_norm_post_template.append("*")
     stack = []
     pointer = 2
     labels = []
@@ -66,7 +70,7 @@ def get_labels(target_norm_post_template: List, target_template: List, remove_du
         stack.append(target_norm_post_template[pointer])
         if stack[-1] in {'+', '-', '*', '/', '^'}:
             if len(stack[-3:]) == 3:
-                if stack[-3].startswith("m") and stack[-2].startswith("m"):
+                if stack[-3].startswith("m_") and stack[-2].startswith("m_"):
                     both_m = True
                 if remove_duplicate:
                     checker = check_in_labels([stack[-3], stack[-2], stack[-1]], labels)
@@ -130,7 +134,7 @@ def get_labels(target_norm_post_template: List, target_template: List, remove_du
 def check_intermediate_m_in_order(labels: List[List[str]]):
     current_m_idx = 0
     for idx, (left_var, right_var, op) in enumerate(labels):
-        if left_var.startswith("m"):
+        if left_var.startswith("m_"):
             # try:
             assert int(left_var[2:]) - current_m_idx == 1
             # except:
@@ -145,9 +149,9 @@ def process_obj(obj: Dict, remove_duplicate: bool = False):
     labels, have_both_m, gap = get_labels(obj["target_norm_post_template"], obj["target_template"], remove_duplicate)
     type_str = "legal"
 
-    if count_variable(target_template) > 7: ## only 2 in test
-        type_str = "variable more than 7"
-        return type_str, labels, gap
+    # if count_variable(target_template) > 7: ## only 2 in test
+    #     type_str = "variable more than 7"
+    #     return type_str, labels, gap
 
 
     # if have_constant(target_template):
@@ -189,12 +193,12 @@ def process_obj(obj: Dict, remove_duplicate: bool = False):
     return type_str, labels, gap
 
 def main():
-    remove_duplicate = False
+    remove_duplicate = True
     for in_file in ["train23k_processed.json", "valid23k_processed.json", "test23k_processed.json"]:
         print(f"working on... {in_file}")
         in_file = f"../data/math23k/{in_file}"
         if remove_duplicate:
-            out_file = in_file.split(".json")[0] + "_nodup.json"
+            out_file = in_file.split(".json")[0] + "_nodup_more.json"
         else:
             out_file = in_file.split(".json")[0] + "_all.json"
         data = read_data(in_file)
@@ -202,6 +206,9 @@ def main():
         inst_num_with_gap = 0
         for obj in tqdm(data, desc="processing data", total=len(data)):
             type_str, labels, gap = process_obj(obj, remove_duplicate=remove_duplicate)
+            if len(labels) == 0:
+                assert len(obj["target_norm_post_template"]) == 3
+                print("something", obj["num_list"], obj["equation"])
             if gap > 0:
                 inst_num_with_gap += 1
             count[type_str] += 1
