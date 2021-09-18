@@ -205,9 +205,12 @@ class UniversalDataset(Dataset):
                 continue
             # compute_value(labels, obj["num_list"])
 
-            if len(labels) > 10:
+            if len(labels) > 10 and "test" in file:
                 numbert_instances_filtered += 1
                 continue
+            for left, right, _, _ in labels:
+                assert left <= right
+
 
             if isinstance(labels, str):
                 num_index_error += 1
@@ -298,7 +301,7 @@ class UniversalDataset(Dataset):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
 
-            if left_var != "#" and (not left_var.startswith("m")):
+            if left_var != "#" and (not left_var.startswith("m_")):
                 if self.constant2id is not None and left_var in self.constant2id:
                     left_var_idx = self.constant2id[left_var]
                 else:
@@ -345,7 +348,7 @@ class UniversalDataset(Dataset):
             if left_var == right_var and (not add_replacement):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
-            if (not left_var.startswith("m")):
+            if (not left_var.startswith("m_")):
                 if self.constant2id is not None and left_var in self.constant2id:
                     left_var_idx = self.constant2id[left_var] + l_idx
                 else:
@@ -358,7 +361,7 @@ class UniversalDataset(Dataset):
                 m_idx = int(left_var[2:])
                 # left_var_idx = -1
                 left_var_idx = l_idx - m_idx
-            if (not right_var.startswith("m")):
+            if (not right_var.startswith("m_")):
                 if self.constant2id is not None and right_var in self.constant2id:
                     right_var_idx = self.constant2id[right_var] + l_idx
                 else:
@@ -396,13 +399,15 @@ class UniversalDataset(Dataset):
                             op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
                         label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                     else:
+                        #left < right
                         if (op in ["+", "*"]):
                             op_idx = uni_labels.index(op)
-                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                            label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                         else:
                             # assert not op.endswith("_rev")
-                            op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
-                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                            assert  "+" not in op and "*" not in op
+                            op_idx = uni_labels.index(op)
+                            label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 if left_var_idx <= right_var_idx:
                     if left_var_idx == right_var_idx and op.endswith("_rev"):
