@@ -55,6 +55,74 @@ def check_in_labels(current_tuple, labels):
         return [current_tuple[1], current_tuple[0], current_tuple[-1]]
     return None
 
+def check_in_parallel_labels(current_tuple, parallel_labels:List[List]):
+    for p_idx, labels in enumerate(parallel_labels):
+        if current_tuple in labels:
+            return p_idx, current_tuple
+        if current_tuple[-1] in {'+', '*'} and [current_tuple[1], current_tuple[0], current_tuple[-1]] in labels:
+            return p_idx, [current_tuple[1], current_tuple[0], current_tuple[-1]]
+    return None, None
+
+def find_exists_parallel(m_string):
+    m, p_idx, v_idx = m_string.split("_")
+    return p_idx
+
+def get_parallel_labels(target_norm_post_template: List, target_template: List, remove_duplicate: bool = False):
+    assert target_norm_post_template[:2] == ["x", "="]
+    if len(target_norm_post_template) == 3:
+        assert target_norm_post_template[2].startswith("temp_")
+        target_norm_post_template.append("1")
+        target_norm_post_template.append("*")
+    stack = []
+    pointer = 2
+    maximum_multiple = 10
+    parallel_labels = []
+    # vertical_for_each_parallel = [0] * maximum_multiple
+    # for _ in range(maximum_multiple):
+    #     parallel_labels.append([])
+
+    both_m = False
+    eq_2_m = {}
+
+    while pointer != len(target_norm_post_template):
+        stack.append(target_norm_post_template[pointer])
+        if stack[-1] in {'+', '-', '*', '/', '^'}:
+            if len(stack[-3:]) == 3:
+                if stack[-3].startswith("m_") and stack[-2].startswith("m_"):
+                    both_m = True
+                if remove_duplicate:
+                    p_idx, checker = check_in_labels([stack[-3], stack[-2], stack[-1]], parallel_labels)
+                    if checker:
+                        m_string = eq_2_m[' '.join(checker)]
+                    else:
+                        if not stack[-3].startswith("m_") and not stack[-2].startswith("m_"):
+                            parallel_labels.append([[stack[-3], stack[-2], stack[-1]]])
+                        else:
+                            left_pidx, left_vidx = (-1, -1) if stack[-3].startswith("temp_") else stack[-3].split("_")[-2:]
+                            right_pidx, right_vidx = (-1, -1) if stack[-2].startswith("temp_") else stack[-2].split("_")[-2:]
+                            if left_vidx > right_vidx:
+                                parallel_labels[left_pidx].append([stack[-3], stack[-2], stack[-1]])
+                                m_string = f"m_{len(labels)}"
+                            elif left_vidx < right_vidx:
+                                parallel_labels[right_pidx].append([stack[-3], stack[-2], stack[-1]])
+                            else:
+                                ##equal
+                                min_pidx = min(left_pidx, right_pidx)
+                                parallel_labels[min_pidx].append([stack[-3], stack[-2], stack[-1]])
+                            if stack[-3].startswith("m_")
+                            # stack[-3].startswith("m_") or  stack[-2].startswith("m_")
+                        labels.append([stack[-3], stack[-2], stack[-1]])
+                        m_string = f"m_{len(labels)}"
+                        eq_2_m[' '.join([stack[-3], stack[-2], stack[-1]])] = m_string
+                else:
+                    labels.append([stack[-3], stack[-2], stack[-1]])
+                    m_string = f"m_{len(labels)}"
+                stack.pop()
+                stack.pop()
+                stack.pop()
+                stack.append(m_string)
+        pointer += 1
+
 def get_labels(target_norm_post_template: List, target_template: List, remove_duplicate: bool = False):
     assert target_norm_post_template[:2] == ["x", "="]
     if len(target_norm_post_template) == 3:
