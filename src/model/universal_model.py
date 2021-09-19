@@ -101,12 +101,14 @@ class UniversalModel(BertPreTrainedModel):
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.variable_gru = None
         if self.consider_multiple_m0:
-            self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+            # self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+            self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=12)
+
         self.constant_num = constant_num
         self.constant_emb = None
         if self.constant_num > 0:
             self.const_rep = nn.Parameter(torch.randn(self.constant_num, config.hidden_size))
-            self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6)
+
 
 
         self.init_weights()
@@ -267,9 +269,16 @@ class UniversalModel(BertPreTrainedModel):
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 else:
                     ## update hidden_state (gated hidden state)
-                    init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
-                    gru_inputs = var_hidden_states.view(-1, hidden_size)
-                    var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+                    # init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
+                    # gru_inputs = var_hidden_states.view(-1, hidden_size)
+                    # var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+
+                    var_attn_mask = 1 - torch.eye(max_num_variable + i, max_num_variable + i, device=best_mi_label_rep.device)
+                    var_attn_mask[:, 0] = 0 ## 0 is valid. 1 is in valid
+                    feature_out = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1)
+                    feature_out = feature_out.permute(1, 0, 2)
+                    feature_out, _ =self.multihead_attention(query = feature_out, key=feature_out, value=feature_out, attn_mask=var_attn_mask)
+                    var_hidden_states = (feature_out.permute(1, 0, 2))[:, 1:, :]
 
                     num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
                     ## 6x2 matrix
