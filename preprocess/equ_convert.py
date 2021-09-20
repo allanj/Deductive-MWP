@@ -108,8 +108,10 @@ class EquationCoverter:
                         right_layer, right_pos = self.find_pos_all_layers_before(right, layers[:this_layer])
                         right_string = str(right_layer)+'_'+str(right_pos)
                     else: right_string = right
-                    this_layer_ref[this_layer].append(left_string+' '+ele+' '+right_string)
-                layers[this_layer].append(left+' '+ele+' '+right)
+                    if left_string+' '+ele+' '+right_string not in this_layer_ref[this_layer]:
+                        this_layer_ref[this_layer].append(left_string+' '+ele+' '+right_string)
+                if left+' '+ele+' '+right not in layers[this_layer]:
+                    layers[this_layer].append(left+' '+ele+' '+right)
 
                 # find in the previous layer
                 m_list.append(left+' '+ele+' '+right)
