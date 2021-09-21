@@ -8,7 +8,7 @@ import numpy as np
 from src.utils import read_data, write_data
 import collections
 import re
-from src.eval.utils import compute_value, compute_value_for_incremental_equations
+from src.eval.utils import compute_value, compute_value_for_incremental_equations, compute_value_for_parallel_equations
 import math
 from typing import Dict, List
 from collections import Counter
@@ -196,7 +196,10 @@ class UniversalDataset(Dataset):
                     print("[WARNING] [Probably ERROR] find duplication")
 
             if self.use_incremental_labeling:
-                labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
+                if "parallel" in file:
+                    labels = self.get_label_ids_parallel(obj["equation_layer"], add_replacement=add_replacement)
+                else:
+                    labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
             else:
                 labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
 
@@ -209,8 +212,13 @@ class UniversalDataset(Dataset):
             if len(labels) > 10 and "test" in file:
                 numbert_instances_filtered += 1
                 continue
-            for left, right, _, _ in labels:
-                assert left <= right
+            if "parallel" in file:
+                for equations in labels:
+                    for left, right, _, _ in equations:
+                        assert left <= right
+            else:
+                for left, right, _, _ in labels:
+                    assert left <= right
 
 
             if isinstance(labels, str):
@@ -218,11 +226,14 @@ class UniversalDataset(Dataset):
                 obj['type_str'] = "illegal"
                 continue
             if self.use_incremental_labeling:
-                # if obj["id"] == '163':
-                #     print("sss")
-                res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                if "parallel" in file:
+                    res, _ = compute_value_for_parallel_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                else:
+                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
             else:
                 res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+
+
             try:
                 if obj["answer"] > 1000000:
                     assert math.fabs(res - obj["answer"]) < 200
@@ -257,8 +268,6 @@ class UniversalDataset(Dataset):
 
     def __getitem__(self, idx) -> UniFeature:
         return self._features[idx]
-
-
 
 
     def get_label_ids(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
@@ -427,12 +436,13 @@ class UniversalDataset(Dataset):
         return label_ids
 
 
-    def get_label_ids_parallel(self, parallel_equation_layers: List[List], add_replacement: bool) -> Union[List[List[int]], None]:
+    def get_label_ids_parallel(self, parallel_equation_layers: List[List], add_replacement: bool) -> Union[List[List[List[int]]], None]:
         # in this data, only have one or zero bracket
-        label_ids = []
+        all_label_ids = []
         num_constant = len(self.constant2id) if self.constant2id is not None else 0
         accumulate_eqs = [0]
         for p_idx, equation_layers in enumerate(parallel_equation_layers):
+            current_label_ids = []
             for l_idx, layer in enumerate(equation_layers):
                 left_var, right_var, op = layer
                 if left_var == right_var and (not add_replacement):
@@ -476,11 +486,13 @@ class UniversalDataset(Dataset):
                     if left_var.startswith("m_") and (not right_var.startswith("m_")):
                         assert left_var_idx < right_var_idx
                         op_idx = uni_labels.index(op)
-                        label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                        current_label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                     elif not left_var.startswith("m_") and right_var.startswith("m_"):
                         assert left_var_idx > right_var_idx
-                        op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
-                        label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                        op_idx = uni_labels.index(op)
+                        if op not in ["+", "*"]:
+                            op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                        current_label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                     else:
                         ## both starts with m
                         if left_var_idx >= right_var_idx: ##left larger means left m_idx smaller
@@ -488,34 +500,35 @@ class UniversalDataset(Dataset):
                             op_idx = uni_labels.index(op)
                             if left_var_idx > right_var_idx and (op not in ["+", "*"]):
                                 op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
-                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                            current_label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                         else:
                             #left < right
                             if (op in ["+", "*"]):
                                 op_idx = uni_labels.index(op)
-                                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                                current_label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                             else:
                                 # assert not op.endswith("_rev")
                                 assert  "+" not in op and "*" not in op
                                 op_idx = uni_labels.index(op)
-                                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                                current_label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                 else:
                     if left_var_idx <= right_var_idx:
                         if left_var_idx == right_var_idx and op.endswith("_rev"):
                             op = op[:-4]
                         op_idx = uni_labels.index(op)
-                        label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
+                        current_label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                     else:
                         # left > right
                         if (op in ["+", "*"]):
                             op_idx = uni_labels.index(op)
-                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                            current_label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                         else:
                             # assert not op.endswith("_rev")
                             op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
-                            label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+                            current_label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
+            all_label_ids.append(current_label_ids)
             accumulate_eqs.append(accumulate_eqs[len(accumulate_eqs)-1] + len(equation_layers))
-        return label_ids
+        return all_label_ids
 
     def collate_function(self, batch: List[UniFeature]):
 
@@ -561,7 +574,6 @@ class UniversalDataset(Dataset):
             for feature in batch:
                 curr_num_intermediates.append(len(feature.labels[h]) if len(feature.labels) > h else 0)
             max_prev_num_intermediate.append(max(curr_num_intermediates))
-        all_binary_labels = []
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -573,7 +585,6 @@ class UniversalDataset(Dataset):
             variable_index_mask = feature.variable_index_mask + [0] * padded_variable_idx_len
 
             current_labels = []
-
             for h_idx in range(max_height):
 
                 current_labels_at_h = []
@@ -586,25 +597,50 @@ class UniversalDataset(Dataset):
 
                 if h_idx >= len(feature.labels):
                     for _ in enumerate(combination):
-                        pad_labels_at_comb = [[0,0] for _ in enumerate(uni_labels)]
+                        pad_labels_at_comb = [[-100,-100] for _ in enumerate(uni_labels)]
                         current_labels_at_h.append(pad_labels_at_comb)
                 else:
-                    current_gold_labels = feature.labels[h_idx]  ## list of equations
+                    current_prev_intermediate_num = len(feature.labels[h_idx - 1]) if h_idx > 0 else 0
+                    current_gold_labels = sorted(feature.labels[h_idx])  ## list of equations
                     c_idx = 0
                     for comb_idx, comb in enumerate(combination):
                         left, right = comb
-                        current_labels_at_comb = []
-                        for label_idx, label in enumerate(uni_labels):
-                            current_labels_at_labels = [0] * 2 ## stop label
-                            if current_gold_labels[c_idx] == [left, right, label_idx, 0]:
-                                current_labels_at_labels[0] = 1
-                            elif current_gold_labels[c_idx] == [left, right, label_idx, 1]:
-                                current_labels_at_labels[1] = 1
-                            current_labels_at_comb.append(current_labels_at_labels)
+                        if left >= current_prev_intermediate_num and left < current_max_prev_num_intermediate:
+                            # padded intermediate var
+                            current_labels_at_comb = [[-100, -100] for _ in enumerate(uni_labels)]
+                        elif right >= current_prev_intermediate_num and right < current_max_prev_num_intermediate:
+                            # padded intermediate var
+                            current_labels_at_comb = [[-100,-100] for _ in enumerate(uni_labels)]
+                        else:
+                            if c_idx < len(current_gold_labels):
+                                current_labels_at_comb = []
+                                gold_l, gold_r, gold_label, gold_stop = current_gold_labels[c_idx]
+                                if gold_l > current_prev_intermediate_num:
+                                    assert current_max_prev_num_intermediate - current_prev_intermediate_num >= 0
+                                    gold_l += current_max_prev_num_intermediate - current_prev_intermediate_num
+                                if gold_r > current_prev_intermediate_num:
+                                    assert current_max_prev_num_intermediate - current_prev_intermediate_num >= 0
+                                    gold_r += current_max_prev_num_intermediate - current_prev_intermediate_num
+                                for label_idx, _ in enumerate(uni_labels):
+                                    current_labels_at_labels = [0] * 2 ## stop label
+                                    if [gold_l, gold_r, gold_label, gold_stop] == [left, right, label_idx, 0]:
+                                        current_labels_at_labels[0] = 1
+                                        c_idx += 1
+                                    elif [gold_l, gold_r, gold_label, gold_stop] == [left, right, label_idx, 1]:
+                                        current_labels_at_labels[1] = 1
+                                        c_idx += 1
+                                    current_labels_at_comb.append(current_labels_at_labels)
+                            else:
+                                current_labels_at_comb = [[0, 0] for _ in enumerate(uni_labels)]
                         current_labels_at_h.append(current_labels_at_comb)
                 current_labels.append(current_labels_at_h)
-            all_binary_labels.append(current_labels)
 
+            maximum_num_comb = max([len(current_labels[h_idx]) for h_idx in range(max_height)])
+            padded_labels_for_comb = [[-100, -100]] * 6
+            for h_idx in range(max_height):
+                current_labels_at_h = current_labels[h_idx]
+                for _ in range(maximum_num_comb - len(current_labels_at_h)):
+                    current_labels_at_h.append(padded_labels_for_comb)
 
             padded_height = max_height - len(feature.labels)
             label_height_mask = feature.label_height_mask + [0] * padded_height
@@ -617,7 +653,7 @@ class UniversalDataset(Dataset):
                                  variable_indexs_end=np.asarray(var_ends),
                                  num_variables=np.asarray(feature.num_variables),
                                  variable_index_mask=np.asarray(variable_index_mask),
-                                 labels =np.asarray(all_binary_labels), # binary_labels: (batch_size , max_height,  num_combinations, num_op_labels, 2)
+                                 labels =np.asarray(current_labels), # binary_labels: (max_height,  num_combinations, num_op_labels, 2)
                                   label_height_mask=np.asarray(label_height_mask))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
@@ -633,16 +669,27 @@ if __name__ == '__main__':
     constant_values = [1.0, 3.14]
     add_replacement = True
     use_incremental_labeling = True
-    UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    # UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    # UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    # UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
-    # UniversalDataset(file="../../data/math23k/test23k_processed_labeled.json", tokenizer=tokenizer)
-    # UniversalDataset(file="../../data/math23k/train23k_processed_labeled.json", tokenizer=tokenizer)
-    # UniversalDataset(file="../../data/math23k/valid23k_processed_labeled.json", tokenizer=tokenizer)
+    # test_set = UniversalDataset(file="../../data/math23k/test23k_parallel.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    train_set = UniversalDataset(file="../../data/math23k/train23k_parallel.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    valid_set = UniversalDataset(file="../../data/math23k/valid23k_parallel.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
+    from torch.utils.data import DataLoader
+    loader  = DataLoader(train_set, batch_size=30, collate_fn=train_set.collate_parallel)
+    for batch in tqdm(loader, total=len(loader)):
+        pass
+        # print(batch.labels[0])
