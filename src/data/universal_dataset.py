@@ -569,11 +569,13 @@ class UniversalDataset(Dataset):
         max_num_variable = max([feature.num_variables  for feature in batch])
         max_height = max([len(feature.labels) for feature in batch])
         max_prev_num_intermediate = [0]
+        accumulate_max_prev_num_intermediate = [0]
         for h in range(max_height):
             curr_num_intermediates = [0] # for later max(), to appear no exception, because max([]) not valid.
             for feature in batch:
                 curr_num_intermediates.append(len(feature.labels[h]) if len(feature.labels) > h else 0)
             max_prev_num_intermediate.append(max(curr_num_intermediates))
+            accumulate_max_prev_num_intermediate.append(max_prev_num_intermediate[-1] + accumulate_max_prev_num_intermediate[-1])
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -589,16 +591,14 @@ class UniversalDataset(Dataset):
 
                 current_labels_at_h = []
                 current_max_prev_num_intermediate = max_prev_num_intermediate[h_idx]
-                num_var_for_comb = current_max_prev_num_intermediate + self.constant_num + max_num_variable
+                num_var_for_comb = accumulate_max_prev_num_intermediate[h_idx] + self.constant_num + max_num_variable
                 num_var_range = torch.arange(0, num_var_for_comb)
                 combination = torch.combinations(num_var_range, r=2, with_replacement=self.use_incremental_labeling) ##number_of_combinations x 2
                 num_combinations, _ = combination.size()
                 combination = combination.numpy()
 
                 if h_idx >= len(feature.labels):
-                    for _ in enumerate(combination):
-                        pad_labels_at_comb = [[-100,-100] for _ in enumerate(uni_labels)]
-                        current_labels_at_h.append(pad_labels_at_comb)
+                    current_labels_at_h = np.full((num_combinations, len(uni_labels), 2), -100).tolist()
                 else:
                     current_prev_intermediate_num = len(feature.labels[h_idx - 1]) if h_idx > 0 else 0
                     current_gold_labels = sorted(feature.labels[h_idx])  ## list of equations
@@ -691,5 +691,6 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     loader  = DataLoader(train_set, batch_size=30, collate_fn=train_set.collate_parallel)
     for batch in tqdm(loader, total=len(loader)):
+        ## TODO: check retrieve the label from loader and get back the results.
         pass
         # print(batch.labels[0])

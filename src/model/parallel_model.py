@@ -322,7 +322,7 @@ def test_case_batch_two():
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
     text1 = "一本笔记本 <quant> 元钱, 王小明共带了 <quant> 元, 他一共能买多少本这样的笔记本?"  ## x= temp_b / temp_a
-    text2 = "爸爸买来 <quant> 个桃子, 吃了 <quant> 个, 妈妈又买来 <quant> 个桃子, 现在有多少个桃子?"  ##x= temp_a - temp_b + temp_c "
+    text2 = "爸爸买来 <quant> 个桃子, 吃了 <quant> 个, 妈妈又买来 <quant> 个桃子, 现在有多少个桃子?"  ##x= temp_a - temp_b + temp_c * temp_a"
     ## tokens = ['一', '本', '笔', '记', '本', '<', 'q', '##uan', '##t', '>', '元', '钱', ',', '王', '小', '明', '共', '带', '了', '<', 'q', '##uan', '##t', '>', '元', ',', '他', '一', '共', '能', '买', '多', '少', '本', '这', '样', '的', '笔', '记', '本', '?']
     res = tokenizer.batch_encode_plus([text1, text2], return_tensors='pt', padding=True)
     input_ids = res["input_ids"]
@@ -337,7 +337,7 @@ def test_case_batch_two():
 
     num_combination, _ = combs.size()
     ## batch_size = 2, height=2, 3
-    labels = torch.zeros(2, 2, num_combination, 6, 2, dtype=torch.long)
+    labels = torch.zeros(2, 3, num_combination, 6, 2, dtype=torch.long)
     labels[0, 0, 10, 5, 1] = 1 ## batch0: b/a
     labels[0, 0, 4] = -100 ## not involved combinations
     labels[0, 0, 8] = -100
@@ -347,10 +347,13 @@ def test_case_batch_two():
     labels[0, 1] = -100  ## batch 0 has no height = 1
 
     labels[1, 0, 10, 1, 0] = 1 ## batch0, height = 0, a - b
-    labels[1, 0, 11, 1, 0] = 1  ## batch0, height = 0, a - b
-    labels[:, 0, 15:] = -100 ## for h=0, the combination only up to 15. torchcombintion(5)
+    # labels[1, 0, 11, 1, 0] = 1  ## batch0, height = 0, a - b
+    labels[:, 0, 15:] = -100 ## for h=0, the combination only up to 15. torch.combintion(5)
+    labels[:, 1, 28:] = -100  ## for h=1, the combination only up to 15. torch.combintion(5)
 
-    labels[1, 1, 5, 0, 1] = 1  ## batch0, height = 1, m0 + c
+    labels[1, 1, 5, 0, 0] = 1  ## batch0, height = 1, m0 + c
+
+    labels[1, 2, 6, 3, 1] = 1
     print(labels.size())
     print(model(input_ids=input_ids,
                 attention_mask=attention_mask,
