@@ -704,10 +704,10 @@ class UniversalDataset(Dataset):
         return results
 
 
-def get_transform_labels_from_batch_labels(batch):
-    num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
-    max_num_variable = max(num_variables)
-    batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
+def get_transform_labels_from_batch_labels(batched_labels, max_num_variable):
+    # num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
+    # max_num_variable = max(num_variables)
+    # batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
 
     batch_size, max_height, num_combinations, _, _ = batched_labels.size()
     ## get max_variable per step
@@ -724,7 +724,6 @@ def get_transform_labels_from_batch_labels(batch):
             maximum_prev_intermediate_for_h[-1] + accumulate_max_prev_num_intermediate[-1])
     all_transform_labels= []
     for b_idx, labels in enumerate(batched_labels):
-        # num_var = num_variables[b_idx]
         transformed_labels = []
         padded_indexs = []
         latest_pad_idxs = []
@@ -825,7 +824,10 @@ if __name__ == '__main__':
         #     print(batch_idx)
         insts = loader.dataset._features[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
         objs = loader.dataset.insts[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
-        all_transform_labels = get_transform_labels_from_batch_labels(batch)
+        num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
+        max_num_variable = max(num_variables)
+        batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
+        all_transform_labels = get_transform_labels_from_batch_labels(batched_labels, max_num_variable)
 
         for b_idx, transformed_labels in enumerate(all_transform_labels):
             checker = is_value_correct(transformed_labels, insts[b_idx].labels, objs[b_idx]["num_list"], num_constant=2,
