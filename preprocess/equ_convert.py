@@ -1,4 +1,6 @@
 from copy import deepcopy
+from tqdm import tqdm
+from src.utils import read_data, write_data
 
 class EquationCoverter:
     # this is a converter for mwp equation calculation
@@ -186,13 +188,12 @@ def an_example():
 
 #an_example()
 
-def load23k(file):
-    import json
-    with open(file) as f:
-        data = json.load(f)
+def load23k(file, output_file= None):
+    data = read_data(file)
     alphabet = 'abcdefghijklmnopqrstuvwxyz'
     equ_layer = []
-    for point in data:
+    invalid_number = 0
+    for point in tqdm(data, desc="processing file", total=len(data)):
         equ = point["target_template"][2:]
         for i in range(len(equ)):
             if equ[i][0] == 't': equ[i] = equ[i][-1]
@@ -205,19 +206,27 @@ def load23k(file):
                 ans = converter.eqLayer2value()
                 # print('cal_ans:',ans, '  ||real:',point['ans'])
                 point['ans'] = point['ans'].replace('%', '/100')
-                try:
-                    if abs(ans - eval(point['ans'])) > 1e-6:
-                        print(point['id'], ':', converter.equation_layer, point['equation'], ans,
-                                                                   point['ans'], point['num_list'])
-                        print(point['text'],'\n')
-                except:
-                    pass
+                # try:
+                #     if abs(ans - eval(point['ans'])) > 1e-6:
+                #         print(point['id'], ':', converter.equation_layer, point['equation'], ans,
+                #                                                    point['ans'], point['num_list'])
+                #         print(point['text'],'\n')
+                # except:
+                #     pass
         except:
+            print(point["target_template"])
+            print(point)
             print('wrong equation', equ)
-
+            print(equ)
+            invalid_number += 1
+        point["parallel_equation_layer"] = converter.equation_layer
         equ_layer.append(converter.equation_layer)
+    write_data(file=output_file, data= data)
+    print(f"invalid number: {invalid_number}")
 
-load23k("math23k/valid23k_processed.json")
+load23k("../data/math23k/valid23k_processed.json", "../data/math23k/valid23k_processed_parallel.json")
+load23k("../data/math23k/train23k_processed.json", "../data/math23k/train23k_processed_parallel.json")
+load23k("../data/math23k/test23k_processed.json", "../data/math23k/test23k_processed_parallel.json")
 
 
 
