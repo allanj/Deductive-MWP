@@ -197,7 +197,7 @@ class UniversalDataset(Dataset):
 
             if self.use_incremental_labeling:
                 if "parallel" in file:
-                    labels = self.get_label_ids_parallel(obj["equation_layer"], add_replacement=add_replacement)
+                    labels = self.get_label_ids_parallel(obj["sorted_equation_layer"], add_replacement=add_replacement)
                 else:
                     labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
             else:
@@ -461,7 +461,7 @@ class UniversalDataset(Dataset):
                     _, m_p_idx, m_v_idx = left_var.split("_")
                     m_p_idx, m_v_idx = int(m_p_idx), int(m_v_idx)
                     # left_var_idx = -1
-                    left_var_idx = accumulate_eqs[p_idx] - accumulate_eqs[m_p_idx] - m_v_idx - 1
+                    left_var_idx = accumulate_eqs[p_idx] - accumulate_eqs[m_p_idx+1]  + m_v_idx
                 if (not right_var.startswith("m_")):
                     if self.constant2id is not None and right_var in self.constant2id:
                         right_var_idx = self.constant2id[right_var] + accumulate_eqs[p_idx]
@@ -471,7 +471,7 @@ class UniversalDataset(Dataset):
                 else:
                     _, m_p_idx, m_v_idx = right_var.split("_")
                     m_p_idx, m_v_idx = int(m_p_idx), int(m_v_idx)
-                    right_var_idx = accumulate_eqs[p_idx] - accumulate_eqs[m_p_idx] - m_v_idx - 1
+                    right_var_idx = accumulate_eqs[p_idx] - accumulate_eqs[m_p_idx+1] + m_v_idx
                 # try:
                 assert right_var_idx >= 0
                 # except:
@@ -563,6 +563,21 @@ class UniversalDataset(Dataset):
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 
+    def update_gold_idx(self, gold_l, padded_indexs, current_prev_intermediate_num, curr_accumate_prev_var, curr_prev_pad, curr_max_accumulate_prev):
+        if gold_l >= current_prev_intermediate_num and gold_l < curr_accumate_prev_var:
+            if len(padded_indexs) > 0:
+                curr_min_m_idx = current_prev_intermediate_num - 1
+                for k in range(current_prev_intermediate_num, curr_max_accumulate_prev):
+                    if k not in padded_indexs:
+                        curr_min_m_idx += 1
+                        if curr_min_m_idx == gold_l:
+                            gold_l = k
+                            break
+                return gold_l
+        elif gold_l >= curr_accumate_prev_var:
+            gold_l += curr_prev_pad
+        return gold_l
+
     def collate_parallel(self, batch: List[UniFeature]):
 
         max_wordpiece_length = max([len(feature.input_ids)  for feature in batch])
@@ -587,6 +602,9 @@ class UniversalDataset(Dataset):
             variable_index_mask = feature.variable_index_mask + [0] * padded_variable_idx_len
 
             current_labels = []
+            padded_labels_at_comb =  [[-100, -100] for _ in enumerate(uni_labels)]
+            curr_accumate_prev_var = 0
+            padded_indexs = []
             for h_idx in range(max_height):
 
                 current_labels_at_h = []
@@ -596,6 +614,11 @@ class UniversalDataset(Dataset):
                 combination = torch.combinations(num_var_range, r=2, with_replacement=self.use_incremental_labeling) ##number_of_combinations x 2
                 num_combinations, _ = combination.size()
                 combination = combination.numpy()
+                curr_accumate_prev_var += len(feature.labels[h_idx - 1]) if h_idx > 0 and h_idx < len(feature.labels) else 0
+                curr_prev_pad = accumulate_max_prev_num_intermediate[h_idx] - curr_accumate_prev_var
+
+                for pid in range(len(padded_indexs)):
+                    padded_indexs[pid] += current_max_prev_num_intermediate
 
                 if h_idx >= len(feature.labels):
                     current_labels_at_h = np.full((num_combinations, len(uni_labels), 2), -100).tolist()
@@ -605,30 +628,55 @@ class UniversalDataset(Dataset):
                     c_idx = 0
                     for comb_idx, comb in enumerate(combination):
                         left, right = comb
+                        current_labels_at_comb = None
                         if left >= current_prev_intermediate_num and left < current_max_prev_num_intermediate:
                             # padded intermediate var
-                            current_labels_at_comb = [[-100, -100] for _ in enumerate(uni_labels)]
-                        elif right >= current_prev_intermediate_num and right < current_max_prev_num_intermediate:
+                            current_labels_at_comb = padded_labels_at_comb
+                            if left not in padded_indexs:
+                                padded_indexs.append(left)
+                        elif left >= current_max_prev_num_intermediate and left < accumulate_max_prev_num_intermediate[h_idx] and left in padded_indexs:
+                            current_labels_at_comb = padded_labels_at_comb
+                        elif left >= accumulate_max_prev_num_intermediate[h_idx] + self.constant_num + feature.num_variables:
+                            ## pad maximum
+                            current_labels_at_comb = padded_labels_at_comb
+
+                        if right >= current_prev_intermediate_num and right < current_max_prev_num_intermediate:
                             # padded intermediate var
-                            current_labels_at_comb = [[-100,-100] for _ in enumerate(uni_labels)]
-                        else:
+                            current_labels_at_comb = padded_labels_at_comb
+                            if right not in padded_indexs:
+                                padded_indexs.append(right)
+                        elif right >= current_max_prev_num_intermediate and right < accumulate_max_prev_num_intermediate[h_idx] and right in padded_indexs:
+                            current_labels_at_comb = padded_labels_at_comb
+                        elif right >= accumulate_max_prev_num_intermediate[h_idx] + self.constant_num + feature.num_variables:
+                            ## pad maximum
+                            current_labels_at_comb = padded_labels_at_comb
+
+                        if current_labels_at_comb is None: ## that means left, right is valid
                             if c_idx < len(current_gold_labels):
                                 current_labels_at_comb = []
                                 gold_l, gold_r, gold_label, gold_stop = current_gold_labels[c_idx]
-                                if gold_l > current_prev_intermediate_num:
-                                    assert current_max_prev_num_intermediate - current_prev_intermediate_num >= 0
-                                    gold_l += current_max_prev_num_intermediate - current_prev_intermediate_num
-                                if gold_r > current_prev_intermediate_num:
-                                    assert current_max_prev_num_intermediate - current_prev_intermediate_num >= 0
-                                    gold_r += current_max_prev_num_intermediate - current_prev_intermediate_num
+                                updated_gold_l = self.update_gold_idx(gold_l, padded_indexs, current_prev_intermediate_num, curr_accumate_prev_var, curr_prev_pad, accumulate_max_prev_num_intermediate[h_idx])
+                                updated_gold_r = self.update_gold_idx(gold_r, padded_indexs, current_prev_intermediate_num, curr_accumate_prev_var, curr_prev_pad, accumulate_max_prev_num_intermediate[h_idx])
+                                should_exit = False
                                 for label_idx, _ in enumerate(uni_labels):
                                     current_labels_at_labels = [0] * 2 ## stop label
-                                    if [gold_l, gold_r, gold_label, gold_stop] == [left, right, label_idx, 0]:
+                                    if should_exit:
+                                        current_labels_at_comb.append(current_labels_at_labels)
+                                        continue
+                                    if [updated_gold_l, updated_gold_r, gold_label, gold_stop] == [left, right, label_idx, 0]:
                                         current_labels_at_labels[0] = 1
                                         c_idx += 1
-                                    elif [gold_l, gold_r, gold_label, gold_stop] == [left, right, label_idx, 1]:
+                                        if c_idx < len(current_gold_labels):
+                                            next_gold_l, next_gold_r, gold_label, gold_stop = current_gold_labels[c_idx]
+                                            if not (next_gold_l == gold_l and next_gold_r == gold_r):
+                                                should_exit = True
+                                    elif [updated_gold_l, updated_gold_r, gold_label, gold_stop] == [left, right, label_idx, 1]:
                                         current_labels_at_labels[1] = 1
                                         c_idx += 1
+                                        if c_idx < len(current_gold_labels):
+                                            next_gold_l, next_gold_r, gold_label, gold_stop = current_gold_labels[c_idx]
+                                            if not (next_gold_l == gold_l and next_gold_r == gold_r):
+                                                should_exit = True
                                     current_labels_at_comb.append(current_labels_at_labels)
                             else:
                                 current_labels_at_comb = [[0, 0] for _ in enumerate(uni_labels)]
@@ -636,11 +684,8 @@ class UniversalDataset(Dataset):
                 current_labels.append(current_labels_at_h)
 
             maximum_num_comb = max([len(current_labels[h_idx]) for h_idx in range(max_height)])
-            padded_labels_for_comb = [[-100, -100]] * 6
             for h_idx in range(max_height):
-                current_labels_at_h = current_labels[h_idx]
-                for _ in range(maximum_num_comb - len(current_labels_at_h)):
-                    current_labels_at_h.append(padded_labels_for_comb)
+                current_labels[h_idx].extend([padded_labels_at_comb  for _ in range(maximum_num_comb - len(current_labels[h_idx]))])
 
             padded_height = max_height - len(feature.labels)
             label_height_mask = feature.label_height_mask + [0] * padded_height
@@ -659,10 +704,86 @@ class UniversalDataset(Dataset):
         return results
 
 
+def get_transform_labels_from_batch_labels(batch):
+    num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
+    max_num_variable = max(num_variables)
+    batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
+
+    batch_size, max_height, num_combinations, _, _ = batched_labels.size()
+    ## get max_variable per step
+    maximum_prev_intermediate_for_h = [0]
+    prev_intermediate_for_h = [[0] * batch_size]
+    accumulate_max_prev_num_intermediate = [0]
+    for h_idx in range(max_height):
+        current_batch_labels = batched_labels[:, h_idx, :, :, :]
+        judge = (current_batch_labels == 1).nonzero()  ## num_nonzerp x 3 (batch_idx, comb_idx, label_idx, stop_id)
+        num_in_batch = torch.bincount(judge[:, 0], minlength=batch_size)  ## (num_in_b0, num_in_b1, ...)
+        maximum_prev_intermediate_for_h.append(max(num_in_batch))
+        prev_intermediate_for_h.append(num_in_batch)
+        accumulate_max_prev_num_intermediate.append(
+            maximum_prev_intermediate_for_h[-1] + accumulate_max_prev_num_intermediate[-1])
+    all_transform_labels= []
+    for b_idx, labels in enumerate(batched_labels):
+        # num_var = num_variables[b_idx]
+        transformed_labels = []
+        padded_indexs = []
+        latest_pad_idxs = []
+        # if objs[b_idx]["id"] == '15336':
+        #     print("sd")
+        for h_idx, curr_comb_labels in enumerate(labels):
+            # curr_comb_labels: num_combinations, num_op_labels, 2
+            judge = (curr_comb_labels == 1).nonzero()  ## num_nonzerp x 3 (comb_idx, label_idx, stop_id)
+            num_var_for_comb = accumulate_max_prev_num_intermediate[h_idx] + len(constant_values) + max_num_variable
+            num_var_range = torch.arange(0, num_var_for_comb)
+            combination = torch.combinations(num_var_range, r=2, with_replacement=True)  ##number_of_combinations x 2
+            gold_comb = combination[judge[:, 0], :]  ## num_nonzero, 2
+            gold_labels = judge[:, 1]  ## num_nonzero,
+            gold_stop_ids = judge[:, 2]  ## num_nonzero,
+            candidate_gold_labels = torch.cat([gold_comb, gold_labels.unsqueeze(-1), gold_stop_ids.unsqueeze(-1)],
+                                              dim=-1)  # num_nonzero, 4.
+            candidate_gold_labels = candidate_gold_labels.cpu().numpy().tolist()
+            decoded_gold_labels = []
+
+            for pid in range(len(padded_indexs)):
+                padded_indexs[pid] += maximum_prev_intermediate_for_h[h_idx]
+            for idx in latest_pad_idxs:
+                if idx not in padded_indexs:
+                    padded_indexs.append(idx)
+            latest_pad_idxs = []
+            for cand_l, cand_r, cand_label, cand_stop in candidate_gold_labels:
+                decoded_l, decoded_r = cand_l, cand_r
+                if cand_l >= accumulate_max_prev_num_intermediate[h_idx]:
+                    decoded_l = decoded_l - len(padded_indexs)
+                else:
+                    for pad_idx in padded_indexs:
+                        if decoded_l > pad_idx:
+                            decoded_l -= 1
+                if cand_r >= accumulate_max_prev_num_intermediate[h_idx]:
+                    decoded_r = decoded_r - len(padded_indexs)
+                else:
+                    for pad_idx in padded_indexs:
+                        if decoded_r > pad_idx:
+                            decoded_r -= 1
+                decoded_gold_labels.append([decoded_l, decoded_r, cand_label, cand_stop])
+            decoded_gold_labels = sorted(decoded_gold_labels)
+            curr_generated_intermediate = len(candidate_gold_labels)
+            pad_num = maximum_prev_intermediate_for_h[h_idx + 1] - curr_generated_intermediate
+
+            for i in range(maximum_prev_intermediate_for_h[h_idx + 1] - 1, curr_generated_intermediate - 1, -1):
+                latest_pad_idxs.append(i)
+            if len(decoded_gold_labels) > 0:
+                transformed_labels.append(decoded_gold_labels)
+            # assert sorted(insts[b_idx].labels) == sorted(transformed_labels)
+
+            # print(insts[b_idx].labels)
+            # print(transformed_labels)
+            # assert insts[b_idx].labels == insts[b_idx].labels
+        all_transform_labels.append(transformed_labels)
+    return all_transform_labels
 
 if __name__ == '__main__':
     from transformers import BertTokenizer
-
+    from src.eval.utils import is_value_correct
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
     constant2id = {"1": 0, "PI": 1}
@@ -679,18 +800,42 @@ if __name__ == '__main__':
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
     #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
-    # test_set = UniversalDataset(file="../../data/math23k/test23k_parallel.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    train_set = UniversalDataset(file="../../data/math23k/train23k_parallel.json", tokenizer=tokenizer,
+    test_set = UniversalDataset(file="../../data/math23k/test23k_parallel_sorted.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    valid_set = UniversalDataset(file="../../data/math23k/valid23k_parallel.json", tokenizer=tokenizer,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
+    # train_set = UniversalDataset(file="../../data/math23k/train23k_parallel_sorted.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
+    valid_set = UniversalDataset(file="../../data/math23k/valid23k_parallel_sorted.json", tokenizer=tokenizer,
+                                 constant2id=constant2id, constant_values=constant_values,
+                                 add_replacement=add_replacement,
+                                 use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
+    # valid_set = UniversalDataset(file="../../data/math23k/debug_parallel.json", tokenizer=tokenizer,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
     from torch.utils.data import DataLoader
-    loader  = DataLoader(train_set, batch_size=30, collate_fn=train_set.collate_parallel)
-    for batch in tqdm(loader, total=len(loader)):
+    loader  = DataLoader(test_set, batch_size=30, collate_fn=test_set.collate_parallel)
+    # exit(0)
+    for batch_idx, batch in tqdm(enumerate(loader), total=len(loader)):
         ## TODO: check retrieve the label from loader and get back the results.
         pass
+        # continue
         # print(batch.labels[0])
+        # if batch_idx == 191:
+        #     print(batch_idx)
+        insts = loader.dataset._features[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
+        objs = loader.dataset.insts[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
+        all_transform_labels = get_transform_labels_from_batch_labels(batch)
+
+        for b_idx, transformed_labels in enumerate(all_transform_labels):
+            checker = is_value_correct(transformed_labels, insts[b_idx].labels, objs[b_idx]["num_list"], num_constant=2,
+                             constant_values=constant_values,
+                             consider_multiple_m0=True, use_parallel_equations=True)
+            # print(checker)
+            try:
+                assert checker[0]
+            except:
+                print(insts[b_idx].labels)
+                print(transformed_labels)
+                print(objs[b_idx]["id"], batch_idx, b_idx)
+                print("error")

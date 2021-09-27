@@ -79,6 +79,7 @@ def compute_value_for_parallel_equations(parallel_equations:List[List], num_list
     grounded_equations = []
     accumulate_eqs = [0]
     for p_idx, equations in enumerate(parallel_equations):
+        current_store_values = []
         for eq_idx, equation in enumerate(equations):
             left_var_idx, right_var_idx, op_idx, _ = equation
             assert left_var_idx >= 0
@@ -90,7 +91,7 @@ def compute_value_for_parallel_equations(parallel_equations:List[List], num_list
             else:
                 assert left_var_idx < accumulate_eqs[p_idx]  ## means m
                 m_idx = accumulate_eqs[p_idx] - left_var_idx
-                left_number = store_values[m_idx - 1]
+                left_number = store_values[left_var_idx]
 
             if right_var_idx >= accumulate_eqs[p_idx] and right_var_idx < accumulate_eqs[p_idx] + num_constant:## means
                 right_number = constant_values[right_var_idx- accumulate_eqs[p_idx]]
@@ -99,12 +100,13 @@ def compute_value_for_parallel_equations(parallel_equations:List[List], num_list
             else:
                 assert right_var_idx < accumulate_eqs[p_idx] ## means m
                 m_idx = accumulate_eqs[p_idx] - right_var_idx
-                right_number = store_values[m_idx - 1]
+                right_number = store_values[right_var_idx]
 
             op = uni_labels[op_idx]
             current_value = compute(left_number, right_number, op)
             grounded_equations.append([left_number, right_number, op, current_value])
-            store_values.append(current_value)
+            current_store_values.append(current_value)
+        store_values = current_store_values + store_values
         accumulate_eqs.append(accumulate_eqs[len(accumulate_eqs) - 1] + len(equations))
     return current_value, grounded_equations
 
