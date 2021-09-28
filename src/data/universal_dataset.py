@@ -704,7 +704,7 @@ class UniversalDataset(Dataset):
         return results
 
 
-def get_transform_labels_from_batch_labels(batched_labels, max_num_variable):
+def get_transform_labels_from_batch_labels(batched_labels, max_num_variable, constant_values, add_empty_transform_labels: bool = False, logits = None):
     # num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
     # max_num_variable = max(num_variables)
     # batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
@@ -741,6 +741,29 @@ def get_transform_labels_from_batch_labels(batched_labels, max_num_variable):
             candidate_gold_labels = torch.cat([gold_comb, gold_labels.unsqueeze(-1), gold_stop_ids.unsqueeze(-1)],
                                               dim=-1)  # num_nonzero, 4.
             candidate_gold_labels = candidate_gold_labels.cpu().numpy().tolist()
+            if logits is not None:
+                current_repeated = []
+                new_candidate_gold_labels = []
+                curr_logits = logits[b_idx, h_idx]  # max_comb, num_labels, 2, 2
+                for f_idx in range(len(candidate_gold_labels)):
+                    if len(current_repeated) > 0:
+                        if candidate_gold_labels[f_idx][:3] == current_repeated[-1][:3]:
+                            current_repeated.append(candidate_gold_labels[f_idx])
+                        else:
+                            if len(current_repeated) > 1:
+                                assert len(current_repeated) == 2
+                                first = curr_logits[current_repeated[0][0], current_repeated[0][1], current_repeated[0][2], current_repeated[0][3]]
+                                second = curr_logits[current_repeated[1][0], current_repeated[1][1], current_repeated[1][2], current_repeated[1][3]]
+                                if first > second:
+                                    new_candidate_gold_labels.append(current_repeated[0])
+                                else:
+                                    new_candidate_gold_labels.append(current_repeated[1])
+                            else:
+                                new_candidate_gold_labels.append(current_repeated[0])
+                            current_repeated.clear()
+                    else:
+                        current_repeated.append(candidate_gold_labels[f_idx])
+
             decoded_gold_labels = []
 
             for pid in range(len(padded_indexs)):
@@ -770,7 +793,7 @@ def get_transform_labels_from_batch_labels(batched_labels, max_num_variable):
 
             for i in range(maximum_prev_intermediate_for_h[h_idx + 1] - 1, curr_generated_intermediate - 1, -1):
                 latest_pad_idxs.append(i)
-            if len(decoded_gold_labels) > 0:
+            if len(decoded_gold_labels) > 0 or add_empty_transform_labels:
                 transformed_labels.append(decoded_gold_labels)
             # assert sorted(insts[b_idx].labels) == sorted(transformed_labels)
 

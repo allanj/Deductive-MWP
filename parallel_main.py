@@ -1,4 +1,4 @@
-from src.data.universal_dataset import UniversalDataset, uni_labels
+from src.data.universal_dataset import UniversalDataset, uni_labels, get_transform_labels_from_batch_labels
 from src.config import Config
 from torch.utils.data import DataLoader
 from transformers import BertTokenizerFast, PreTrainedTokenizer
@@ -14,6 +14,8 @@ from src.model.parallel_model import ParallelModel
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List
+from torch.nn.utils.rnn import pad_sequence
+
 
 def set_seed(args):
     random.seed(args.seed)
@@ -33,8 +35,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--dev_num', type=int, default=5, help="The number of development data, -1 means all data")
 
 
-    parser.add_argument('--train_file', type=str, default="data/math23k/train23k_parallel.json")
-    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_parallel.json")
+    parser.add_argument('--train_file', type=str, default="data/math23k/train23k_parallel_sorted.json")
+    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_parallel_sorted.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
@@ -162,57 +164,26 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     return model
 
-def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num: int):
-    batch_size, max_num_variable = feature.variable_indexs_start.size()
-    device = feature.variable_indexs_start.device
-    batched_prediction = []
-    current_intermediate_num = 0
-
-    for b_idx in range(batch_size):
-        batched_prediction.append([])
-        for _ in range(len(all_logits)):
-            batched_prediction[b_idx].append([])
-
-    for k, logits in enumerate(all_logits):
-        # logits: (batch_size, num_combinations/num_m0, num_labels, 2, 2)
-        current_max_num_variable = max_num_variable + constant_num + current_intermediate_num
-        num_var_range = torch.arange(0, current_max_num_variable, device=feature.variable_indexs_start.device)
-        combination = torch.combinations(num_var_range, r=2, with_replacement=True)  ##number_of_combinations x 2
-        num_combinations, _ = combination.size()
-
-        best_final_logits, best_final_label = logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels, 2
-        judge = (best_final_label == 1).nonzero() ## num_non_zero x 4
-        if len(judge) > 0:
-            num_in_batch = torch.bincount(judge[:, 0], minlength=batch_size)  ## for example batch_size = 3 [2, 2, 4]..
-            current_intermediate_num = max(num_in_batch)
-            combination = combination.cpu().numpy()
-            current_logits = best_final_logits[judge[:,0], judge[:,1], judge[:,2], judge[:,3]].cpu().numpy()
-            judge = judge.cpu().numpy()
-            for j_idx, (curr_best, logit) in enumerate(judge, current_logits):
-                ##TODO: the left, right, need to offset the number of current padded intermediate
-                b_idx, best_comb_idx, best_label, best_stop_label = curr_best
-                left, right = combination[best_comb_idx]
-                curr_label = [left, right, best_label, best_stop_label, logit]
-                batched_prediction[b_idx][k].append(curr_label)
-
-    return batched_prediction
 
 def check_multiple_stops_and_remove_logit(batched_prediction):
     for b, inst_predictions in enumerate(batched_prediction):
-        last_equations = batched_prediction[b][-1]
-        if len(last_equations) > 1:
-            max_logit = -100000
-            max_idx = -1
-            for idx, last_equation in enumerate(last_equations):
-                if last_equation[-1] > max_logit:
-                    max_idx = idx
-                    break
-            assert max_idx != -1
-            batched_prediction[b][-1] = [last_equations[max_idx]]
-    for b, inst_predictions in enumerate(batched_prediction):
-        for p, prediction_step in enumerate(inst_predictions):
-            for eq_idx, equation in enumerate(prediction_step):
-                batched_prediction[b][p][eq_idx] = equation[:-1]
+        ## filter out empy first
+        for p, prediction_steps in enumerate(inst_predictions):
+            if len(prediction_steps) == 0:
+                batched_prediction[b] = batched_prediction[b][:p]
+
+        if len(batched_prediction[b]) > 0:
+            last_equations = batched_prediction[b][-1]
+            if len(last_equations) > 1:
+                stop_equation_idxs = []
+                for idx, last_equation in enumerate(last_equations):
+                    left, right, op_label, stop_id = last_equation
+                    if stop_id == 1:
+                        stop_equation_idxs.append(idx)
+                if len(stop_equation_idxs) > 0:
+                    batched_prediction[b][-1] = [last_equations[stop_equation_idxs[0]]]
+                else:
+                    batched_prediction[b][-1] = [last_equations[0]]
     return batched_prediction
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, res_file: str= None, err_file:str = None) -> float:
@@ -231,30 +202,20 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev),
                              return_dict=True, is_eval=True).all_logits ##List of (batch_size, num_combinations/num_m0, num_labels, 2, 2)
-                batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num)
-                ## post process remve extra
-                for b, inst_predictions in enumerate(batched_prediction):
-                    for p, prediction_step in enumerate(inst_predictions):
-                        for eq_idx, equation in enumerate(prediction_step):
-                            left, right, op_id, stop_id, logit = equation
-                            if stop_id == 1:
-                                batched_prediction[b] = batched_prediction[b][:(p+1)]
-                                break
-                batched_prediction = check_multiple_stops_and_remove_logit(batched_prediction)
+                num_variables = feature.num_variables.cpu().numpy().tolist()  # batch_size
+                max_num_variable = max(num_variables)
+                # (batch_size, max_height, num_combinations/num_m0, num_labels, 2, 2)
+                pad_all_logits = pad_sequence([logits.permute(1,0,2,3,4) for logits in all_logits],
+                                              padding_value=-np.inf).permute(2,1,0,3,4,5)
+                _, best_final_label = pad_all_logits.max(dim=-1)  ## batch_size, height, num_combinations/num_m0, num_labels, 2
+                ## TODO: if both 1 for stop_id=0 and 1 for stop_id = 1, what to do?..find sum===2, then use for loop to modify
+                all_transform_predictions = get_transform_labels_from_batch_labels(best_final_label, max_num_variable=max_num_variable, constant_values=constant_values, add_empty_transform_labels=True)
+                all_transform_predictions = check_multiple_stops_and_remove_logit(all_transform_predictions)
                 ## check if there are multiple stops
-                batched_labels = feature.labels.cpu().numpy().tolist()
-                for b, inst_labels in enumerate(batched_labels):
-                    for p, label_step in enumerate(inst_labels):
-                        if p == len(inst_labels) - 1:
-                            assert len(label_step) == 1
-                        for eq_idx, equation in enumerate(label_step):
-                            left, right, op_id, stop_id = equation
-                            if stop_id == 1:
-                                batched_labels[b] = batched_labels[b][:(p+1)]
-                                break
+                all_transform_labels = get_transform_labels_from_batch_labels(feature.labels, max_num_variable=max_num_variable, constant_values=constant_values)
 
-                predictions.extend(batched_prediction)
-                labels.extend(batched_labels)
+                predictions.extend(all_transform_predictions)
+                labels.extend(all_transform_labels)
     corr = 0
     num_label_step_corr = Counter()
     num_label_step_total = Counter()

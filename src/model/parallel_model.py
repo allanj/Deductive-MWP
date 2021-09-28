@@ -155,7 +155,7 @@ class ParallelModel(BertPreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2, with_replacement=True)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 # batch_size x num_combinations. 2*6
-                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)  # batch_size, num_combinations
+                batched_combination_mask = (1 - get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)) * -10000.0  # batch_size, num_combinations
 
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
                 # m0_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size * 3).sum(dim=-2)
@@ -167,20 +167,23 @@ class ParallelModel(BertPreTrainedModel):
                 m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
                 m0_logits = self.label_rep2label(m0_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
+                masked_m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
 
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
-                m0_combined_logits = m0_logits + m0_stopper_logits
+                m0_combined_logits = masked_m0_logits + m0_stopper_logits
 
                 all_logits.append(m0_combined_logits)
                 if labels is not None and not is_eval:
                     mask_for_labels = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
-                    m0_gold_labels = labels[:, i, :num_combinations, :,  :]  ## (batch_size, num_combinations, num_op_labels, 2)
-                    m0_gold_labels[mask_for_labels == 0] = -100
+                    m0_gold_labels = labels[:, i, :num_combinations, :,  :] ## (batch_size, num_combinations, num_op_labels, 2)
+                    # m0_gold_labels[mask_for_labels == 0] = -100
                     loss_fct = CrossEntropyLoss()
-                    loss = loss + loss_fct(m0_combined_logits.view(-1, 2), m0_gold_labels.contiguous().view(-1))
+                    current_loss = loss_fct(m0_combined_logits.contiguous().view(-1, 2), m0_gold_labels.contiguous().view(-1))
+                    # return current_loss
+                    # print(current_loss, i)
+                    loss = loss + current_loss
                     mo_gold_label_tmp = m0_gold_labels.sum(dim=-1) ## (batch_size, num_combinations, num_op_labels)
                     judge = (mo_gold_label_tmp == 1).nonzero() ## non_zero_num x 3, -> (batch_idx, comb_idx, label_idx)
                 else:
@@ -222,7 +225,7 @@ class ParallelModel(BertPreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2,  with_replacement=True)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 variable_index_mask = torch.cat([mi_mask, variable_index_mask], dim= 1)
-                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)
+                batched_combination_mask = (1 - get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)) * -10000.0
 
                 var_hidden_states = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
@@ -231,7 +234,7 @@ class ParallelModel(BertPreTrainedModel):
                                         expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
                 mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
                 mi_logits = self.label_rep2label(mi_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
+                mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
 
                 mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
                 mi_combined_logits = mi_logits + mi_stopper_logits
@@ -243,9 +246,11 @@ class ParallelModel(BertPreTrainedModel):
                 if labels is not None and not is_eval:
                     mask_for_labels = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
                     mi_gold_labels = labels[:, i, :num_combinations, :,  :]   ## (batch_size, num_combinations, num_op_labels, 2)
-                    mi_gold_labels[mask_for_labels == 0] = -100
+                    # mi_gold_labels[mask_for_labels == 0] = -100
                     loss_fct = CrossEntropyLoss()
-                    loss = loss + loss_fct(mi_combined_logits.view(-1, 2), mi_gold_labels.contiguous().view(-1))
+                    current_loss = loss_fct(mi_combined_logits.view(-1, 2), mi_gold_labels.contiguous().view(-1))
+                    # print(current_loss, i)
+                    loss = loss + current_loss
                     mi_gold_label_tmp = mi_gold_labels.sum(dim=-1)
                     judge = (mi_gold_label_tmp == 1).nonzero()
                 else:
