@@ -16,6 +16,7 @@ from src.eval.utils import is_value_correct
 from typing import List
 from torch.nn.utils.rnn import pad_sequence
 
+# torch.autograd.set_detect_anomaly(True)
 
 def set_seed(args):
     random.seed(args.seed)
@@ -110,7 +111,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     optimizer, scheduler = get_optimizers(config, model, t_total)
     model.zero_grad()
 
-    best_performance = -1
+    best_performance = 10000000
     os.makedirs(f"model_files/{config.model_folder}", exist_ok=True)
 
     for epoch in range(num_epochs):
@@ -145,8 +146,9 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
         if valid_dataloader is not None:
-            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values)
-            if performance > best_performance:
+            # performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values)
+            performance = evaluate_loss(valid_dataloader, model, dev, fp16=bool(config.fp16))
+            if performance < best_performance:
                 print(f"[Model Info] Saving the best model... with performance {performance}..")
                 best_performance = performance
                 model_to_save = model.module if hasattr(model, "module") else model
@@ -185,6 +187,25 @@ def check_multiple_stops_and_remove_logit(batched_prediction):
                 else:
                     batched_prediction[b][-1] = [last_equations[0]]
     return batched_prediction
+
+def evaluate_loss(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool) -> float:
+    model.eval()
+    total_valid_loss = 0
+    with torch.no_grad():
+        for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
+            with torch.cuda.amp.autocast(enabled=fp16):
+                valid_loss = model(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                                   token_type_ids=feature.token_type_ids.to(dev),
+                                   variable_indexs_start=feature.variable_indexs_start.to(dev),
+                                   variable_indexs_end=feature.variable_indexs_end.to(dev),
+                                   num_variables=feature.num_variables.to(dev),
+                                   variable_index_mask=feature.variable_index_mask.to(dev),
+                                   labels=feature.labels.to(dev),
+                                   return_dict=True,
+                                   is_eval=False).loss  ##List of (batch_size, num_combinations/num_m0, num_labels, 2, 2)
+                total_valid_loss += valid_loss.item()
+    print(f"Total validation loss: {total_valid_loss}")
+    return total_valid_loss
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, res_file: str= None, err_file:str = None) -> float:
     model.eval()
