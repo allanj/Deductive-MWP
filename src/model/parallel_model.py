@@ -5,7 +5,7 @@ import torch.utils.checkpoint
 from torch.nn import CrossEntropyLoss
 from src.model.universal_model import UniversalOutput
 from torch.nn.utils.rnn import pad_sequence
-
+import numpy as np
 
 
 def get_combination_mask_from_variable_mask(variable_mask:torch.Tensor, combination: torch.Tensor):
@@ -155,7 +155,8 @@ class ParallelModel(BertPreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2, with_replacement=True)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 # batch_size x num_combinations. 2*6
-                batched_combination_mask = (1 - get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)) * -10000.0  # batch_size, num_combinations
+                ## actually need to guarantee the place with mask (mask = 0), we must predict 0 instead of 1.
+                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination) #(1 - ) * -10000.0  # batch_size, num_combinations
 
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
                 # m0_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size * 3).sum(dim=-2)
@@ -167,7 +168,9 @@ class ParallelModel(BertPreTrainedModel):
                 m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
                 m0_logits = self.label_rep2label(m0_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                masked_m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
+                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
+                expanded_mask[:, :, :,:,0][expanded_mask[:, :, :,:,0] == -np.inf] = -10000 ## in order to make the padding size only predict 0, -10000 > -inf
+                masked_m0_logits = m0_logits + expanded_mask
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
 
@@ -225,7 +228,7 @@ class ParallelModel(BertPreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2,  with_replacement=True)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
                 variable_index_mask = torch.cat([mi_mask, variable_index_mask], dim= 1)
-                batched_combination_mask = (1 - get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination)) * -10000.0
+                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination) #(1 - ) * -10000.0
 
                 var_hidden_states = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
@@ -234,7 +237,9 @@ class ParallelModel(BertPreTrainedModel):
                                         expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
                 mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
                 mi_logits = self.label_rep2label(mi_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
+                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
+                expanded_mask[:, :, :, :, 0][expanded_mask[:, :, :, :, 0] == -np.inf] = -10000 ## in order to make the padding size only predict 0,
+                mi_logits = mi_logits + expanded_mask
 
                 mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
                 mi_combined_logits = mi_logits + mi_stopper_logits
