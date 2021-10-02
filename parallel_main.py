@@ -1,4 +1,4 @@
-from src.data.universal_dataset import UniversalDataset, uni_labels, get_transform_labels_from_batch_labels
+from src.data.universal_dataset import UniversalDataset, uni_labels, get_transform_labels_from_batch_labels_without_intermediate_pad
 from src.config import Config
 from torch.utils.data import DataLoader
 from transformers import BertTokenizerFast, PreTrainedTokenizer
@@ -14,7 +14,6 @@ from src.model.parallel_model import ParallelModel
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List
-from torch.nn.utils.rnn import pad_sequence
 
 # torch.autograd.set_detect_anomaly(True)
 
@@ -32,8 +31,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--device', type=str, default="cpu", choices=['cpu', 'cuda:0', 'cuda:1', 'cuda:2'], help="GPU/CPU devices")
     parser.add_argument('--batch_size', type=int, default=30)
     parser.add_argument('--shuffle_train_data', type=int, default=1, choices=[0, 1], help="shuffle the training data or not")
-    parser.add_argument('--train_num', type=int, default=5, help="The number of training data, -1 means all data")
-    parser.add_argument('--dev_num', type=int, default=5, help="The number of development data, -1 means all data")
+    parser.add_argument('--train_num', type=int, default=-1, help="The number of training data, -1 means all data")
+    parser.add_argument('--dev_num', type=int, default=-1, help="The number of development data, -1 means all data")
 
 
     parser.add_argument('--train_file', type=str, default="data/math23k/train23k_parallel_sorted.json")
@@ -60,7 +59,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
     parser.add_argument('--learning_rate', type=float, default=2e-5, help="learning rate of the AdamW optimizer")
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help="The maximum gradient norm")
-    parser.add_argument('--num_epochs', type=int, default=20, help="The number of epochs to run")
+    parser.add_argument('--num_epochs', type=int, default=100, help="The number of epochs to run")
     parser.add_argument('--temperature', type=float, default=1.0, help="The temperature during the training")
     parser.add_argument('--fp16', type=int, default=0, choices=[0,1], help="using fp16 to train the model")
 
@@ -111,7 +110,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     optimizer, scheduler = get_optimizers(config, model, t_total)
     model.zero_grad()
 
-    best_performance = 10000000
+    best_loss = 10000000
+    best_acc = -1
     os.makedirs(f"model_files/{config.model_folder}", exist_ok=True)
 
     for epoch in range(num_epochs):
@@ -143,18 +143,28 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
             scheduler.step()
             model.zero_grad()
             if iter % 1000 == 0:
-                print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
-        print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
+                print(f"[Training INfo] epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.5f}", flush=True)
+        print(f"[Training INfo] Finish epoch: {epoch}, loss: {total_loss:.5f}, mean loss: {total_loss/len(train_dataloader):.5f}", flush=True)
         if valid_dataloader is not None:
-            # performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values)
-            performance = evaluate_loss(valid_dataloader, model, dev, fp16=bool(config.fp16))
-            if performance < best_performance:
-                print(f"[Model Info] Saving the best model... with performance {performance}..")
-                best_performance = performance
-                model_to_save = model.module if hasattr(model, "module") else model
-                model_to_save.save_pretrained(f"model_files/{config.model_folder}")
-                tokenizer.save_pretrained(f"model_files/{config.model_folder}")
-    print(f"[Model Info] Best validation performance: {best_performance}")
+            if epoch < 1000:
+                performance = evaluate_loss(valid_dataloader, model, dev, fp16=bool(config.fp16))
+                current_is_best = performance < best_loss
+                if current_is_best:
+                    print(f"[Model Info] Saving the best model... with performance {performance}..")
+                    best_loss = performance
+                    model_to_save = model.module if hasattr(model, "module") else model
+                    model_to_save.save_pretrained(f"model_files/{config.model_folder}")
+                    tokenizer.save_pretrained(f"model_files/{config.model_folder}")
+            else:
+                performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values)
+                current_is_best = performance > best_acc
+                if current_is_best:
+                    print(f"[Model Info] Saving the best model... with performance {performance}..")
+                    best_acc = performance
+                    model_to_save = model.module if hasattr(model, "module") else model
+                    model_to_save.save_pretrained(f"model_files/{config.model_folder}")
+                    tokenizer.save_pretrained(f"model_files/{config.model_folder}")
+    print(f"[Model Info] Best validation performance: {best_loss:.4f}, {best_acc:.4f}")
     model = ParallelModel.from_pretrained(f"model_files/{config.model_folder}",
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
@@ -173,6 +183,15 @@ def check_multiple_stops_and_remove_logit(batched_prediction):
         for p, prediction_steps in enumerate(inst_predictions):
             if len(prediction_steps) == 0:
                 batched_prediction[b] = batched_prediction[b][:p]
+                break
+            meet_stop = False
+            for sub_equation in prediction_steps:
+                if sub_equation[-1] == 1:
+                    meet_stop = True
+                    break
+            if meet_stop:
+                batched_prediction[b] = batched_prediction[b][:p+1]
+                break
 
         if len(batched_prediction[b]) > 0:
             last_equations = batched_prediction[b][-1]
@@ -212,8 +231,10 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     predictions = []
     labels = []
     constant_num = len(constant_values) if constant_values else 0
+    insts = valid_dataloader.dataset.insts
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
+            current_insts = insts[index * valid_dataloader.batch_size: (index + 1) * valid_dataloader.batch_size]
             with torch.cuda.amp.autocast(enabled=fp16):
                 all_logits = model(input_ids= feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
                              token_type_ids= feature.token_type_ids.to(dev),
@@ -222,19 +243,53 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev),
-                             return_dict=True, is_eval=True).all_logits ##List of (batch_size, num_combinations/num_m0, num_labels, 2, 2)
+                             return_dict=True, is_eval=True).all_logits
+                ##List of tuples ( (batch_size, num_combinations/num_m0, num_labels, 2),  (batch_size, num_combinations/num_m0, num_labels, 2))
+                max_num_comb = max([logits[0].size(1) for logits in all_logits])
+                all_comb_logits = []
+                all_stopper_logits = []
+                for i in range(len(all_logits)):
+                    batch_size, curr_comb_size, label_size, _,  = all_logits[i][0].size()
+                    pad_comb_size = max_num_comb - curr_comb_size
+                    mask = torch.ones((pad_comb_size, label_size, 2),device= all_logits[i][0].device)
+                    mask[:, :, 0] = -100
+                    mask[:, :, 1] = -10000
+                    mask = mask.unsqueeze(0).expand(batch_size, pad_comb_size, label_size, 2)
+                    # all_logits[i] = (torch.cat([all_logits[i][0], mask], dim = 1), torch.cat([all_logits[i][1], mask], dim = 1))
+                    all_comb_logits.append(torch.cat([all_logits[i][0], mask], dim = 1))
+                    all_stopper_logits.append(torch.cat([all_logits[i][1], mask], dim = 1))
+                pad_all_comb_logits = torch.stack(all_comb_logits, dim=1) #(batch_size, height, num_combinations/num_m0, num_labels, 2)
+                pad_all_stopper_logits = torch.stack(all_stopper_logits, dim=1) #(batch_size, height, num_combinations/num_m0, num_labels, 2)
+
+                best_comb_logits,  best_comb_final_label = pad_all_comb_logits.max(dim=-1) #batch_size, height, num_combinations/num_m0, num_labels
+                best_stopper_logits, best_stop_id = pad_all_stopper_logits.max(dim=-1) #batch_size, height, num_combinations/num_m0, num_labels
+
+                best_final_label = torch.cat([best_comb_final_label.unsqueeze(-1), best_stop_id.unsqueeze(-1)], dim=-1)
+                best_final_label[:,:,:,:,1][best_comb_final_label==0] = 0## for stopper=1, if comb=0, stopper must be 0 as well
+
                 num_variables = feature.num_variables.cpu().numpy().tolist()  # batch_size
                 max_num_variable = max(num_variables)
-                # (batch_size, max_height, num_combinations/num_m0, num_labels, 2, 2)
-                pad_all_logits = pad_sequence([logits.permute(1,0,2,3,4) for logits in all_logits],
-                                              padding_value=-np.inf).permute(2,1,0,3,4,5)
-                _, best_final_label = pad_all_logits.max(dim=-1)  ## batch_size, height, num_combinations/num_m0, num_labels, 2
-                ## TODO: if both 1 for stop_id=0 and 1 for stop_id = 1, what to do?..find sum===2, then use for loop to modify
-                all_transform_predictions = get_transform_labels_from_batch_labels(best_final_label, max_num_variable=max_num_variable, constant_values=constant_values, add_empty_transform_labels=True)
+                # best_final_logits, best_final_label = pad_all_logits.max(dim=-1)  ## batch_size, height, num_combinations/num_m0, num_labels, 2
+                ## NOTE: if both 1 for stop_id=0 and 1 for stop_id = 1, what to do?..find sum===2, then use for loop to modify
+                ## process labels
+                sum_best_final_label = best_final_label.sum(dim=-1)
+                sum_judge = (sum_best_final_label==2).nonzero() ## num_nonzero x 4 (batch_size, height, num_combinations/num_m0, num_labels)
+                num_nonzero, _ = sum_judge.size()
+                for n_idx in range(num_nonzero):
+                    batch_idx, height_idx, comb_idx, label_idx = sum_judge[n_idx]
+                    best_final_label[batch_idx, height_idx, comb_idx, label_idx, 0] = 0
+                    best_final_label[batch_idx, height_idx, comb_idx, label_idx, 1] = 1
+                ##finish process final label, remove duplicate combinations.
+                all_transform_predictions = get_transform_labels_from_batch_labels_without_intermediate_pad(best_final_label.cpu(), max_num_variable=max_num_variable, constant_values=constant_values, add_empty_transform_labels=True)
+                # print(f"[Validation Info] before checking prediction: {all_transform_predictions}")
                 all_transform_predictions = check_multiple_stops_and_remove_logit(all_transform_predictions)
+                # print(f"[Validation Info] after checking prediction: {all_transform_predictions}")
                 ## check if there are multiple stops
-                all_transform_labels = get_transform_labels_from_batch_labels(feature.labels, max_num_variable=max_num_variable, constant_values=constant_values)
-
+                all_transform_labels = get_transform_labels_from_batch_labels_without_intermediate_pad(feature.labels, max_num_variable=max_num_variable, constant_values=constant_values)
+                # print(f"[Validation Info] gold: {all_transform_labels}")
+                # for inst in current_insts:
+                #     print(inst["equation_layer"])
+                # print(f"[Validation Info] ****************************")
                 predictions.extend(all_transform_predictions)
                 labels.extend(all_transform_labels)
     corr = 0
@@ -327,9 +382,9 @@ def main():
 
         # Prepare data loader
         print("[Data Info] Loading training data", flush=True)
-        train_dataloader = DataLoader(dataset, batch_size=conf.batch_size, shuffle=conf.shuffle_train_data, num_workers=conf.num_workers, collate_fn=dataset.collate_parallel)
+        train_dataloader = DataLoader(dataset, batch_size=conf.batch_size, shuffle=conf.shuffle_train_data, num_workers=conf.num_workers, collate_fn=dataset.collate_parallel_without_intermediate_pad)
         print("[Data Info] Loading validation data", flush=True)
-        valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_parallel)
+        valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_parallel_without_intermediate_pad)
 
 
         # Train the model
@@ -352,7 +407,7 @@ def main():
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                         use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
-                                      collate_fn=eval_dataset.collate_parallel)
+                                      collate_fn=eval_dataset.collate_parallel_without_intermediate_pad)
         os.makedirs("results", exist_ok=True)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"

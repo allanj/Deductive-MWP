@@ -8,12 +8,24 @@ from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 
 
-def get_combination_mask_from_variable_mask(variable_mask:torch.Tensor, combination: torch.Tensor):
+def get_combination_mask_from_variable_mask(variable_mask:torch.Tensor, combination: torch.Tensor, left_var_mask: torch.Tensor = None):
     batch_size, num_variable = variable_mask.size()  ## batch_size x num_variable
     num_combinations, _ = combination.size()  ## 6
     temp = torch.gather(variable_mask, 1, combination.view(-1).unsqueeze(0).expand(batch_size, num_combinations * 2))
     batched_comb_mask = temp.unsqueeze(-1).view(batch_size, num_combinations, 2)
-    return batched_comb_mask[:,:, 0] * batched_comb_mask[:,:, 1]
+
+    comb_mask = batched_comb_mask[:,:, 0] * batched_comb_mask[:,:, 1]
+
+    if left_var_mask is not None:
+        temp_left = torch.gather(left_var_mask, 1, combination[:,0].unsqueeze(0).expand(batch_size, num_combinations))
+        # batched_combination = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
+        # left_mask = batched_combination[:, :, 0] < max_num_intermediate
+        # # right_mask = batched_combination[:, :, 1] >= max_num_intermediate
+
+        comb_mask = comb_mask * temp_left
+
+    return comb_mask
+
 
 
 class ParallelModel(BertPreTrainedModel):
@@ -146,6 +158,7 @@ class ParallelModel(BertPreTrainedModel):
         mi_mask = None
         loss = 0
         all_logits = []
+        scatter_index = None
         for i in range(max_height):
             linear_modules = self.linears[i] if self.diff_param_for_height else self.linears
             if i == 0:
@@ -166,34 +179,62 @@ class ParallelModel(BertPreTrainedModel):
 
                 ## batch_size, num_combinations/num_m0, num_labels, hidden_size
                 m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
-                ## batch_size, num_combinations/num_m0, num_labels, 2, 2
-                m0_logits = self.label_rep2label(m0_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
-                expanded_mask[:, :, :,:,0][expanded_mask[:, :, :,:,0] == -np.inf] = -10000 ## in order to make the padding size only predict 0, -10000 > -inf
+                # ## batch_size, num_combinations/num_m0, num_labels, 2, 2
+                # m0_logits = self.label_rep2label(m0_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
+                # expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
+                # expanded_mask[:, :, :,:,0][expanded_mask[:, :, :,:,0] == -np.inf] = -10000 ## in order to make the padding size only predict 0, -10000 > -inf
+                # masked_m0_logits = m0_logits + expanded_mask
+                # ## batch_size, num_combinations/num_m0, num_labels, 2, 2
+                # m0_stopper_logits = self.stopper(m0_label_rep).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
+
+                ## batch_size, num_combinations/num_m0, num_labels, 2
+                m0_logits = self.label_rep2label(m0_label_rep)
+                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                expanded_mask[:, :, :, 0][expanded_mask[:, :, :, 0] == -np.inf] = -1000
                 masked_m0_logits = m0_logits + expanded_mask
-                ## batch_size, num_combinations/num_m0, num_labels, 2, 2
-                m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
+                ## batch_size, num_combinations/num_m0, num_labels, 2,
+                m0_stopper_logits = self.stopper(m0_label_rep) + expanded_mask
 
                 ## batch_size, num_combinations/num_m0, num_labels, 2, 2
-                m0_combined_logits = masked_m0_logits + m0_stopper_logits
+                # m0_combined_logits = masked_m0_logits + m0_stopper_logits
 
-                all_logits.append(m0_combined_logits)
+                all_logits.append((masked_m0_logits, m0_stopper_logits))
                 if labels is not None and not is_eval:
+
                     mask_for_labels = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
                     m0_gold_labels = labels[:, i, :num_combinations, :,  :] ## (batch_size, num_combinations, num_op_labels, 2)
                     # m0_gold_labels[mask_for_labels == 0] = -100
-                    loss_fct = CrossEntropyLoss()
-                    current_loss = loss_fct(m0_combined_logits.contiguous().view(-1, 2), m0_gold_labels.contiguous().view(-1))
-                    # return current_loss
-                    # print(current_loss, i)
-                    loss = loss + current_loss
+                    comb_labels = torch.logical_or(m0_gold_labels[:, :, :, 0], m0_gold_labels[:, :, :, 1]).long() ## (batch_size, num_combinations, num_op_labels)
+                    comb_labels[m0_gold_labels[:, :, :, 0]==-100] =-100
+                    # j1= m0_gold_labels[:, :, :, 0]==-100
+                    # j2=m0_gold_labels[:, :, :, 1]==-100
+                    # assert (j1.long()-j2.long()).sum() == 0
+                    nonzero_comb = (m0_gold_labels[:, :, :, 1] == 1).nonzero() ##(batch_size x 3) [b_idx, comb_idx, label_idx]
+                    # assert nonzero_comb.size(0) == batch_size
+                    stopper_labels = comb_labels.clone()
+                    stopper_labels[comb_labels==1] = 0
+                    stopper_labels[nonzero_comb[:,0], nonzero_comb[:,1], nonzero_comb[:,2]] = 1
+                    loss_fct = CrossEntropyLoss(reduction='sum')
+                    comb_loss = loss_fct(masked_m0_logits.view(-1,2), comb_labels.view(-1))
+                    stopper_loss = loss_fct(m0_stopper_logits.view(-1,2), stopper_labels.view(-1))
+                    loss = loss + comb_loss + stopper_loss
+                    # # m0_gold_labels[mask_for_labels == 0] = -100
+                    # loss_fct = CrossEntropyLoss()
+                    # current_loss = loss_fct(m0_combined_logits.view(-1, 2), m0_gold_labels.contiguous().view(-1))
+                    # loss = loss + current_loss
+
+
                     mo_gold_label_tmp = m0_gold_labels.sum(dim=-1) ## (batch_size, num_combinations, num_op_labels)
                     judge = (mo_gold_label_tmp == 1).nonzero() ## non_zero_num x 3, -> (batch_idx, comb_idx, label_idx)
                 else:
-                    best_final_logits, best_final_label = m0_combined_logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels, 2
-                    best_final_label = torch.logical_or(best_final_label[:, :, :, 0], best_final_label[:, :, :, 1])  ## batch_size, num_combinations/num_m0, num_labels
+                    # best_final_logits, best_final_label = m0_combined_logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels, 2
+                    # best_final_label = torch.logical_or(best_final_label[:, :, :, 0], best_final_label[:, :, :, 1])  ## batch_size, num_combinations/num_m0, num_labels
+                    best_final_logits, best_final_label = masked_m0_logits.max(dim=-1)
                     judge = (best_final_label == 1).nonzero()
                 num_in_batch = torch.bincount(judge[:,0], minlength=batch_size)  ## for example batch_size = 3 [2, 2, 4]..
+                ## batch_size x (max_num_variable)
+                scatter_index = num_in_batch.unsqueeze(-1).repeat(1, max_num_variable) + torch.arange(max_num_variable, device=num_in_batch.device).long().unsqueeze(0).repeat(batch_size, 1)
+
                 splits = torch.cumsum(num_in_batch, dim=0)[:-1].tolist() ## cumsum = [2,4,8] so the split point [2,4]
                 max_num_intermediate = max(num_in_batch) ## max = 4
                 if batch_size > 1:
@@ -205,45 +246,52 @@ class ParallelModel(BertPreTrainedModel):
                 best_mi_label_rep = m0_label_rep[padded_judge[:, 0], padded_judge[:, 1], padded_judge[:, 2]]  ## batch_size x max_num_m0,  hidden_size
                 best_mi_label_rep = best_mi_label_rep.view(batch_size, max_num_intermediate, hidden_size)
 
+
                 # get mask
-                temp_range = torch.arange(max_num_intermediate, device=m0_combined_logits.device).unsqueeze(0).expand(batch_size, max_num_intermediate) #[ [0,1,2,3], [0,1,2,3], [0,1,2,3]
+                temp_range = torch.arange(max_num_intermediate, device=best_mi_label_rep.device).unsqueeze(0).expand(batch_size, max_num_intermediate) #[ [0,1,2,3], [0,1,2,3], [0,1,2,3]
                 num_in_batch = num_in_batch.unsqueeze(1).expand(batch_size, max_num_intermediate) #[[2,2,2,2], [2,2,2,2], [4,4,4,4]]
                 mi_mask = torch.lt(temp_range, num_in_batch) # batch_size x max_num_intermediate [[1,1,0,0], [1,1,0,0], [1,1,1,1]]
+
             else:
                 ## update hidden_state (gated hidden state)
-                var_attn_mask = torch.eye(max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable , device=best_mi_label_rep.device)
+                # var_attn_mask = torch.eye(max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable , device=best_mi_label_rep.device)
+                #
+                # expanded_mi_mask = mi_mask.unsqueeze(1).expand(batch_size, max_num_intermediate + max_num_variable, max_num_intermediate)
+                # expanded_var_attn_mask = var_attn_mask.unsqueeze(0).expand(batch_size, max_num_intermediate + max_num_variable, max_num_intermediate + max_num_variable).clone()
+                # expanded_var_attn_mask[:, :, :max_num_intermediate] = torch.logical_and(expanded_var_attn_mask[:, :, :max_num_intermediate], expanded_mi_mask)
+                # expanded_var_attn_mask = expanded_var_attn_mask.unsqueeze(1).expand(batch_size, self.multihead_attention.num_heads, max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable)
+                # expanded_var_attn_mask = 1 - (expanded_var_attn_mask.contiguous().view(-1, max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable))
+                #
+                # feature_out = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)
+                # feature_out, _ = self.multihead_attention(query=feature_out, key=feature_out, value=feature_out, attn_mask=expanded_var_attn_mask)
+                # var_hidden_states = feature_out[:, max_num_intermediate:, :]
 
-                expanded_mi_mask = mi_mask.unsqueeze(1).expand(batch_size, max_num_intermediate + max_num_variable, max_num_intermediate)
-                expanded_var_attn_mask = var_attn_mask.unsqueeze(0).expand(batch_size, max_num_intermediate + max_num_variable, max_num_intermediate + max_num_variable).clone()
-                expanded_var_attn_mask[:, :, :max_num_intermediate] = torch.logical_and(expanded_var_attn_mask[:, :, :max_num_intermediate], expanded_mi_mask)
-                expanded_var_attn_mask = expanded_var_attn_mask.unsqueeze(1).expand(batch_size, self.multihead_attention.num_heads, max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable)
-                expanded_var_attn_mask = 1 - (expanded_var_attn_mask.contiguous().view(-1, max_num_intermediate + max_num_variable , max_num_intermediate + max_num_variable))
-
-                feature_out = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)
-                feature_out, _ = self.multihead_attention(query=feature_out, key=feature_out, value=feature_out, attn_mask=expanded_var_attn_mask)
-                var_hidden_states = feature_out[:, max_num_intermediate:, :]
+                tmp_var_hidden_states = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)
+                var_hidden_states = torch.scatter(tmp_var_hidden_states, 1, scatter_index.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size), var_hidden_states)
 
                 num_var_range = torch.arange(0, max_num_variable + max_num_intermediate, device=variable_indexs_start.device)
                 ## 6x2 matrix
                 combination = torch.combinations(num_var_range, r=2,  with_replacement=True)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
-                variable_index_mask = torch.cat([mi_mask, variable_index_mask], dim= 1)
-                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination) #(1 - ) * -10000.0
+                # variable_index_mask = torch.cat([mi_mask, variable_index_mask], dim= 1)
+                tmp_variable_index_mask = torch.cat([mi_mask, torch.zeros(variable_index_mask.size(), dtype=torch.long, device=mi_mask.device)], dim=-1)
+                variable_index_mask = torch.scatter(tmp_variable_index_mask, 1, scatter_index, variable_index_mask.long())
+                batched_combination_mask = get_combination_mask_from_variable_mask(variable_mask=variable_index_mask, combination=combination, left_var_mask=tmp_variable_index_mask) #(1 - ) * -10000.0
 
-                var_hidden_states = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
+                # var_hidden_states = torch.cat([best_mi_label_rep, var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
                 expanded_var_comb_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size)
                 mi_hidden_states = torch.cat( [expanded_var_comb_hidden_states[:, :, 0, :], expanded_var_comb_hidden_states[:, :, 1, :],
                                         expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
                 mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
-                mi_logits = self.label_rep2label(mi_label_rep).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2, 2).log()
-                expanded_mask[:, :, :, :, 0][expanded_mask[:, :, :, :, 0] == -np.inf] = -10000 ## in order to make the padding size only predict 0,
+                mi_logits = self.label_rep2label(mi_label_rep)
+                expanded_mask = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                expanded_mask[:, :, :, 0][expanded_mask[:, :, :, 0] == -np.inf] = -10000 ## in order to make the padding size only predict 0,
                 mi_logits = mi_logits + expanded_mask
 
-                mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep)).unsqueeze(-2).expand(batch_size, num_combinations, self.num_labels, 2, 2)
-                mi_combined_logits = mi_logits + mi_stopper_logits
-                all_logits.append(mi_combined_logits)
+                mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep)) + expanded_mask
+                # mi_combined_logits = mi_logits + mi_stopper_logits
+                all_logits.append((mi_logits, mi_stopper_logits))
 
 
                 max_num_variable += max_num_intermediate
@@ -252,15 +300,29 @@ class ParallelModel(BertPreTrainedModel):
                     mask_for_labels = batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
                     mi_gold_labels = labels[:, i, :num_combinations, :,  :]   ## (batch_size, num_combinations, num_op_labels, 2)
                     # mi_gold_labels[mask_for_labels == 0] = -100
-                    loss_fct = CrossEntropyLoss()
-                    current_loss = loss_fct(mi_combined_logits.view(-1, 2), mi_gold_labels.contiguous().view(-1))
-                    # print(current_loss, i)
-                    loss = loss + current_loss
+
+                    comb_labels = torch.logical_or(mi_gold_labels[:, :, :, 0], mi_gold_labels[:, :, :, 1]).long()  ## (batch_size, num_combinations, num_op_labels)
+                    comb_labels[mi_gold_labels[:, :, :, 0] == -100] = -100
+                    nonzero_comb = (mi_gold_labels[:, :, :, 1] == 1).nonzero()  ##(batch_size x 3) [b_idx, comb_idx, label_idx]
+                    # assert nonzero_comb.size(0) == batch_size
+                    stopper_labels = comb_labels.clone()
+                    stopper_labels[comb_labels == 1] = 0
+                    stopper_labels[nonzero_comb[:, 0], nonzero_comb[:, 1], nonzero_comb[:, 2]] = 1
+                    loss_fct = CrossEntropyLoss(reduction='sum')
+                    comb_loss = loss_fct(mi_logits.view(-1, 2), comb_labels.view(-1))
+                    stopper_loss = loss_fct(mi_stopper_logits.view(-1, 2), stopper_labels.view(-1))
+                    loss = loss + comb_loss + stopper_loss
+
+                    # loss_fct = CrossEntropyLoss()
+                    # current_loss = loss_fct(mi_combined_logits.view(-1, 2), mi_gold_labels.contiguous().view(-1))
+                    # # print(current_loss, i)
+                    # loss = loss + current_loss
+
                     mi_gold_label_tmp = mi_gold_labels.sum(dim=-1)
                     judge = (mi_gold_label_tmp == 1).nonzero()
                 else:
-                    best_final_logits, best_final_label = mi_combined_logits.max(dim=-1)
-                    best_final_label = torch.logical_or(best_final_label[:, :, :, 0], best_final_label[:, :, :, 1])
+                    best_final_logits, best_final_label = mi_logits.max(dim=-1)
+                    # best_final_label = torch.logical_or(best_final_label[:, :, :, 0], best_final_label[:, :, :, 1])
                     judge = (best_final_label == 1).nonzero()
 
                 num_in_batch = torch.bincount(judge[:, 0], minlength=batch_size)  ## for example batch_size = 3 [2, 2, 4]..
@@ -272,11 +334,11 @@ class ParallelModel(BertPreTrainedModel):
                     padded_judge = pad_sequence(list_of_tensors, batch_first=True).view(-1, 3)
                 else:
                     padded_judge = judge
-
+                scatter_index = num_in_batch.unsqueeze(-1).repeat(1, max_num_variable) + torch.arange(max_num_variable).long().unsqueeze(0).repeat(batch_size, 1)
                 best_mi_label_rep = mi_label_rep[padded_judge[:, 0], padded_judge[:, 1], padded_judge[:,  2]]  ## batch_size x max_num_m0,  hidden_size
                 best_mi_label_rep = best_mi_label_rep.view(batch_size, max_num_intermediate, hidden_size)
                 # get mask
-                temp_range = torch.arange(max_num_intermediate, device=mi_combined_logits.device).unsqueeze(0).expand(batch_size, max_num_intermediate)  # [ [0,1,2,3], [0,1,2,3], [0,1,2,3]
+                temp_range = torch.arange(max_num_intermediate, device=best_mi_label_rep.device).unsqueeze(0).expand(batch_size, max_num_intermediate)  # [ [0,1,2,3], [0,1,2,3], [0,1,2,3]
                 num_in_batch = num_in_batch.unsqueeze(1).expand(batch_size, max_num_intermediate)
                 mi_mask = torch.lt(temp_range, num_in_batch)
 
