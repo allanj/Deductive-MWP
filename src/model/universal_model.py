@@ -119,6 +119,8 @@ class UniversalModel(BertPreTrainedModel):
         position_ids=None,
         variable_indexs_start: torch.Tensor = None, ## batch_size x num_variable
         variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
+        const_start: torch.Tensor = None,
+        const_end: torch.Tensor = None,
         num_variables: torch.Tensor = None, # batch_size [3,4]
         variable_index_mask:torch.Tensor = None, # batch_size x num_variable
         head_mask=None,
@@ -166,8 +168,11 @@ class UniversalModel(BertPreTrainedModel):
         else:
             var_hidden_states = var_start_hidden_states
         if self.constant_num > 0:
-            constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
-            var_hidden_states = torch.cat([constant_hidden_states, var_hidden_states], dim=1)
+            const_start_rep = torch.gather(outputs.last_hidden_state, 1, const_start.unsqueeze(-1).expand(batch_size, self.constant_num, hidden_size))
+            const_end_rep = torch.gather(outputs.last_hidden_state, 1,  const_end.unsqueeze(-1).expand(batch_size, self.constant_num, hidden_size))
+            const_rep = const_start_rep + const_end_rep
+            # constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
+            var_hidden_states = torch.cat([const_rep, var_hidden_states], dim=1)
             num_variables = num_variables + self.constant_num
             max_num_variable = max_num_variable + self.constant_num
             const_idx_mask = torch.ones((batch_size, self.constant_num), device=variable_indexs_start.device)

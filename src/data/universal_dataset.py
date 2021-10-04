@@ -20,7 +20,7 @@ uni_labels = [
     '+','-', '-_rev', '*', '/', '/_rev'
 ]
 
-UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
+UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask const_start const_end')
 UniFeature.__new__.__defaults__ = (None,) * 7
 
 class UniversalDataset(Dataset):
@@ -153,6 +153,13 @@ class UniversalDataset(Dataset):
                     input_text += word + " "
                 else:
                     input_text += word
+            if len(self.constant_values) > 0:
+                input_text += " 备用常数是 "
+                for i in range(len(self.constant_values)):
+                    if i != len(self.constant_values) - 1:
+                        input_text += "<quant> 和 "
+                    else:
+                        input_text += "<quant>"
             res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
             input_ids = res["input_ids"]
             attention_mask = res["attention_mask"]
@@ -179,6 +186,13 @@ class UniversalDataset(Dataset):
                     if token == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
                         var_starts.append(k)
                         var_ends.append(k+4)
+            const_starts = []
+            const_ends = []
+            if len(self.constant_values) > 0:
+                const_starts = var_starts[-len(self.constant_values):]
+                const_ends = var_ends[-len(self.constant_values):]
+                var_starts = var_starts[:-len(self.constant_values)]
+                var_ends = var_ends[:-len(self.constant_values)]
             num_variable = len(var_starts)
             var_mask = [1] * num_variable
             if len(obj["equation_layer"])  == 0:
@@ -257,7 +271,9 @@ class UniversalDataset(Dataset):
                            num_variables=num_variable,
                            variable_index_mask=var_mask,
                            labels = labels,
-                           label_height_mask=label_height_mask)
+                           label_height_mask=label_height_mask,
+                           const_start=const_starts,
+                           const_end=const_ends)
             )
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
@@ -563,7 +579,9 @@ class UniversalDataset(Dataset):
                                  num_variables=np.asarray(feature.num_variables),
                                  variable_index_mask=np.asarray(variable_index_mask),
                                  labels =np.asarray(labels),
-                                  label_height_mask=np.asarray(label_height_mask))
+                                  label_height_mask=np.asarray(label_height_mask),
+                                  const_start= np.array(feature.const_start, dtype=int),
+                                  const_end =np.array(feature.const_end, dtype=int))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 
@@ -696,10 +714,12 @@ def get_transform_labels_from_batch_labels_without_intermediate_pad(batched_labe
             gold_stop_ids = judge[:, 2]  ## num_nonzero,
             candidate_gold_labels = torch.cat([gold_comb, gold_labels.unsqueeze(-1), gold_stop_ids.unsqueeze(-1)], dim=-1)  # num_nonzero, 4.
             candidate_gold_labels = candidate_gold_labels.cpu().numpy().tolist()
-
+            if logits is not None:
+                for candidate_gold_label, sub_judge in zip(candidate_gold_labels, judge):
+                    candidate_gold_label.append(logits[b_idx, h_idx, sub_judge[0], sub_judge[1], sub_judge[2]].item())
             decoded_gold_labels = candidate_gold_labels
-
-            decoded_gold_labels = sorted(decoded_gold_labels)
+            # if not is_val:
+            #     decoded_gold_labels = sorted(decoded_gold_labels)
 
             if len(decoded_gold_labels) > 0 or add_empty_transform_labels:
                 transformed_labels.append(decoded_gold_labels)
