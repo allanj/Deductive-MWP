@@ -186,7 +186,7 @@ def check_multiple_stops_and_remove_logit(batched_prediction):
                 break
             meet_stop = False
             for sub_equation in prediction_steps:
-                if sub_equation[-1] == 1:
+                if sub_equation[3] == 1:
                     meet_stop = True
                     break
             if meet_stop:
@@ -198,14 +198,23 @@ def check_multiple_stops_and_remove_logit(batched_prediction):
             if len(last_equations) > 1:
                 stop_equation_idxs = []
                 for idx, last_equation in enumerate(last_equations):
-                    left, right, op_label, stop_id = last_equation
+                    left, right, op_label, stop_id, score = last_equation
                     if stop_id == 1:
-                        stop_equation_idxs.append(idx)
+                        stop_equation_idxs.append((idx, score))
                 if len(stop_equation_idxs) > 0:
-                    batched_prediction[b][-1] = [last_equations[stop_equation_idxs[0]]]
+                    stop_equation_idxs.sort(key=lambda x: x[1], reverse=True)
+                    batched_prediction[b][-1] = [last_equations[stop_equation_idxs[0][0]]]
                 else:
                     batched_prediction[b][-1] = [last_equations[0]]
-    return batched_prediction
+    res_equations = []
+    for b, inst_predictions in enumerate(batched_prediction):
+        ## filter out empy first
+        curr_eqs = []
+        for p, prediction_steps in enumerate(inst_predictions):
+            eqs = [sub_equation[:4]  for sub_equation in prediction_steps]
+            curr_eqs.append(eqs)
+        res_equations.append(curr_eqs)
+    return res_equations
 
 def evaluate_loss(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool) -> float:
     model.eval()
@@ -244,43 +253,41 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev),
                              return_dict=True, is_eval=True).all_logits
-                ##List of tuples ( (batch_size, num_combinations/num_m0, num_labels, 2),  (batch_size, num_combinations/num_m0, num_labels, 2))
-                max_num_comb = max([logits[0].size(1) for logits in all_logits])
-                all_comb_logits = []
-                all_stopper_logits = []
+                ##List of  (batch_size, num_combinations/num_m0, num_labels, stop_num, 2)
+                max_num_comb = max([logits.size(1) for logits in all_logits])
+                all_final_logits = []
                 for i in range(len(all_logits)):
-                    batch_size, curr_comb_size, label_size, _,  = all_logits[i][0].size()
+                    batch_size, curr_comb_size, label_size, _, _  = all_logits[i].size()
                     pad_comb_size = max_num_comb - curr_comb_size
-                    mask = torch.ones((pad_comb_size, label_size, 2),device= all_logits[i][0].device)
-                    mask[:, :, 0] = -100
-                    mask[:, :, 1] = -10000
-                    mask = mask.unsqueeze(0).expand(batch_size, pad_comb_size, label_size, 2)
+                    mask = torch.ones((pad_comb_size, label_size, 2, 2),device= all_logits[i].device)
+                    mask[:, :, :, 0] = -100
+                    mask[:, :, :, 1] = -10000
+                    mask = mask.unsqueeze(0).expand(batch_size, pad_comb_size, label_size, 2, 2)
                     # all_logits[i] = (torch.cat([all_logits[i][0], mask], dim = 1), torch.cat([all_logits[i][1], mask], dim = 1))
-                    all_comb_logits.append(torch.cat([all_logits[i][0], mask], dim = 1))
-                    all_stopper_logits.append(torch.cat([all_logits[i][1], mask], dim = 1))
-                pad_all_comb_logits = torch.stack(all_comb_logits, dim=1) #(batch_size, height, num_combinations/num_m0, num_labels, 2)
-                pad_all_stopper_logits = torch.stack(all_stopper_logits, dim=1) #(batch_size, height, num_combinations/num_m0, num_labels, 2)
+                    all_final_logits.append(torch.cat([all_logits[i], mask], dim = 1))
+                pad_all_logits = torch.stack(all_final_logits, dim=1) #(batch_size, height, num_combinations/num_m0, num_labels, 2, 2)
 
-                best_comb_logits,  best_comb_final_label = pad_all_comb_logits.max(dim=-1) #batch_size, height, num_combinations/num_m0, num_labels
-                best_stopper_logits, best_stop_id = pad_all_stopper_logits.max(dim=-1) #batch_size, height, num_combinations/num_m0, num_labels
-
-                best_final_label = torch.cat([best_comb_final_label.unsqueeze(-1), best_stop_id.unsqueeze(-1)], dim=-1)
-                best_final_label[:,:,:,:,1][best_comb_final_label==0] = 0## for stopper=1, if comb=0, stopper must be 0 as well
+                best_logits,  best_final_label = pad_all_logits.max(dim=-1) #batch_size, height, num_combinations/num_m0, num_labels, 2
 
                 num_variables = feature.num_variables.cpu().numpy().tolist()  # batch_size
                 max_num_variable = max(num_variables)
                 # best_final_logits, best_final_label = pad_all_logits.max(dim=-1)  ## batch_size, height, num_combinations/num_m0, num_labels, 2
                 ## NOTE: if both 1 for stop_id=0 and 1 for stop_id = 1, what to do?..find sum===2, then use for loop to modify
                 ## process labels
-                sum_best_final_label = best_final_label.sum(dim=-1)
-                sum_judge = (sum_best_final_label==2).nonzero() ## num_nonzero x 4 (batch_size, height, num_combinations/num_m0, num_labels)
-                num_nonzero, _ = sum_judge.size()
-                for n_idx in range(num_nonzero):
-                    batch_idx, height_idx, comb_idx, label_idx = sum_judge[n_idx]
-                    best_final_label[batch_idx, height_idx, comb_idx, label_idx, 0] = 0
-                    best_final_label[batch_idx, height_idx, comb_idx, label_idx, 1] = 1
+                # sum_best_final_label = best_final_label.sum(dim=-1)
+                # sum_judge = (sum_best_final_label==2).nonzero() ## num_nonzero x 4 (batch_size, height, num_combinations/num_m0, num_labels)
+                # num_nonzero, _ = sum_judge.size()
+                # for n_idx in range(num_nonzero):
+                #     batch_idx, height_idx, comb_idx, label_idx = sum_judge[n_idx]
+                #     if best_logits[batch_idx, height_idx, comb_idx, label_idx, 0] > best_logits[batch_idx, height_idx, comb_idx, label_idx, 1]:
+                #         best_final_label[batch_idx, height_idx, comb_idx, label_idx, 0] = 0
+                #         best_final_label[batch_idx, height_idx, comb_idx, label_idx, 1] = 1
+                #     else:
+                #         best_final_label[batch_idx, height_idx, comb_idx, label_idx, 0] = 1
+                #         best_final_label[batch_idx, height_idx, comb_idx, label_idx, 1] = 0
                 ##finish process final label, remove duplicate combinations.
-                all_transform_predictions = get_transform_labels_from_batch_labels_without_intermediate_pad(best_final_label.cpu(), max_num_variable=max_num_variable, constant_values=constant_values, add_empty_transform_labels=True)
+                all_transform_predictions = get_transform_labels_from_batch_labels_without_intermediate_pad(best_final_label.cpu(), max_num_variable=max_num_variable, constant_values=constant_values, add_empty_transform_labels=True,
+                                                                                                            logits=best_logits)
                 # print(f"[Validation Info] before checking prediction: {all_transform_predictions}")
                 all_transform_predictions = check_multiple_stops_and_remove_logit(all_transform_predictions)
                 # print(f"[Validation Info] after checking prediction: {all_transform_predictions}")

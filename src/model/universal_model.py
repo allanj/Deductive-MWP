@@ -106,7 +106,7 @@ class UniversalModel(BertPreTrainedModel):
         self.constant_emb = None
         if self.constant_num > 0:
             self.const_rep = nn.Parameter(torch.randn(self.constant_num, config.hidden_size))
-            self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6)
+            # self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6, batch_first=True)
 
 
         self.init_weights()
@@ -164,7 +164,7 @@ class UniversalModel(BertPreTrainedModel):
             var_end_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_end.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
             var_hidden_states = var_start_hidden_states + var_end_hidden_states
         else:
-            var_hidden_states= var_start_hidden_states
+            var_hidden_states = var_start_hidden_states
         if self.constant_num > 0:
             constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
             var_hidden_states = torch.cat([constant_hidden_states, var_hidden_states], dim=1)
@@ -172,6 +172,9 @@ class UniversalModel(BertPreTrainedModel):
             max_num_variable = max_num_variable + self.constant_num
             const_idx_mask = torch.ones((batch_size, self.constant_num), device=variable_indexs_start.device)
             variable_index_mask = torch.cat([const_idx_mask, variable_index_mask], dim = 1)
+
+            # updated_all_states, _ = self.multihead_attention(var_hidden_states, var_hidden_states, var_hidden_states,key_padding_mask=variable_index_mask)
+            # var_hidden_states = torch.cat([updated_all_states[:, :2, :], var_hidden_states[:, 2:, :]], dim=1)
 
         best_mi_label_rep = None
         loss = 0

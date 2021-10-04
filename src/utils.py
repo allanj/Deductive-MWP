@@ -31,7 +31,18 @@ def get_optimizers(config: Config, model: nn.Module, num_training_steps: int, we
 			"weight_decay": 0.0,
 		},
 	]
+	# optimizer_grouped_parameters = [
+	# 	{
+	# 		"params": [p for n, p in model.named_parameters() if not n.startswith("bert")],
+	# 		"lr": config.learning_rate,
+	# 	},
+	# 	{
+	# 		"params": [p for n, p in model.named_parameters() if n.startswith("bert")],
+	# 		"lr": 2e-5,
+	# 	},
+	# ]
 	optimizer = AdamW(optimizer_grouped_parameters, lr=config.learning_rate, eps=eps) # , correct_bias=False)
+	# optimizer = AdamW(optimizer_grouped_parameters, eps=eps)  # , correct_bias=False)
 	warmup_step = warmup_step if warmup_step >= 0 else int(0.1 * num_training_steps)
 	scheduler = get_linear_schedule_with_warmup(
 		optimizer, num_warmup_steps=warmup_step, num_training_steps=num_training_steps

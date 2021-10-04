@@ -33,8 +33,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--dev_num', type=int, default=-1, help="The number of development data, -1 means all data")
 
 
-    parser.add_argument('--train_file', type=str, default="data/math23k/train23k_processed_all.json")
-    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_processed_all.json")
+    parser.add_argument('--train_file', type=str, default="data/math23k/train23k_processed_nodup.json")
+    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_processed_nodup.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
