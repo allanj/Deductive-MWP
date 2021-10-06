@@ -108,6 +108,13 @@ class UniversalModel(BertPreTrainedModel):
             self.const_rep = nn.Parameter(torch.randn(self.constant_num, config.hidden_size))
             # self.multihead_attention = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6, batch_first=True)
 
+        self.variable_scorer = nn.Sequential(
+                    nn.Linear(config.hidden_size, config.hidden_size),
+                    nn.ReLU(),
+                    nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+                    nn.Dropout(config.hidden_dropout_prob),
+                    nn.Linear(config.hidden_size, 1),
+                )
 
         self.init_weights()
 
@@ -204,8 +211,12 @@ class UniversalModel(BertPreTrainedModel):
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
 
+                var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+                expanded_var_scores = torch.gather(var_scores, 1, combination.unsqueeze(0).expand(batch_size, num_combinations, 2).view(batch_size, -1)).unsqueeze(-1).view(batch_size, num_combinations, 2)
+                expanded_var_scores = expanded_var_scores.sum(dim=-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
+
                 ## batch_size, num_combinations/num_m0, num_labels, 2
-                m0_combined_logits = m0_logits + m0_stopper_logits
+                m0_combined_logits = m0_logits + m0_stopper_logits + expanded_var_scores
 
                 all_logits.append(m0_combined_logits)
                 best_temp_logits, best_stop_label =  m0_combined_logits.max(dim=-1) ## batch_size, num_combinations/num_m0, num_labels
@@ -290,7 +301,11 @@ class UniversalModel(BertPreTrainedModel):
                     mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                     mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
-                    mi_combined_logits = mi_logits + mi_stopper_logits
+                    var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+                    expanded_var_scores = torch.gather(var_scores, 1, combination.unsqueeze(0).expand(batch_size, num_combinations, 2).view(batch_size,-1)).unsqueeze(-1).view(batch_size, num_combinations, 2)
+                    expanded_var_scores = expanded_var_scores.sum(dim=-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels,  2)
+
+                    mi_combined_logits = mi_logits + mi_stopper_logits + expanded_var_scores
                     all_logits.append(mi_combined_logits)
                     best_temp_logits, best_stop_label = mi_combined_logits.max( dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
                     best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
