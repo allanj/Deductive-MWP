@@ -1,7 +1,7 @@
 from src.data.universal_dataset import UniversalDataset, uni_labels
 from src.config import Config
 from torch.utils.data import DataLoader
-from transformers import BertTokenizerFast, PreTrainedTokenizer
+from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast
 from tqdm import tqdm
 import argparse
 from src.utils import get_optimizers, write_data
@@ -11,6 +11,7 @@ import numpy as np
 import os
 import random
 from src.model.universal_model import UniversalModel
+from src.model.universal_model_roberta import UniversalModel_Roberta
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List
@@ -35,6 +36,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--train_file', type=str, default="data/math23k/train23k_processed_nodup.json")
     parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_processed_nodup.json")
+    # parser.add_argument('--train_file', type=str, default="data/mawps-single/mawps_train_nodup.json")
+    # parser.add_argument('--dev_file', type=str, default="data/mawps-single/mawps_test_nodup.json")
 
     parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
@@ -46,9 +49,12 @@ def parse_arguments(parser:argparse.ArgumentParser):
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
     parser.add_argument('--model_folder', type=str, default="math_solver", help="the name of the models, to save the model")
-    parser.add_argument('--bert_folder', type=str, default="hfl", help="The folder name that contains the BERT model")
+    parser.add_argument('--bert_folder', type=str, default="", help="The folder name that contains the BERT model")
     parser.add_argument('--bert_model_name', type=str, default="chinese-roberta-wwm-ext",
                         help="The bert model name to used")
+    # parser.add_argument('--bert_folder', type=str, default="", help="The folder name that contains the BERT model")
+    # parser.add_argument('--bert_model_name', type=str, default="roberta-base",
+    #                     help="The bert model name to used")
     parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
     parser.add_argument('--height', type=int, default=10, help="the model height")
     parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
@@ -86,7 +92,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
     constant_num = len(constant_values) if constant_values else 0
-    model = UniversalModel.from_pretrained(bert_model_name,
+    MODEL_CLASS = UniversalModel_Roberta if "roberta" in bert_model_name else UniversalModel
+    model = MODEL_CLASS.from_pretrained(bert_model_name,
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
                                            height=config.height,
@@ -154,7 +161,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
     print(f"[Model Info] Best validation performance: {best_performance}")
-    model = UniversalModel.from_pretrained(f"model_files/{config.model_folder}",
+    model = MODEL_CLASS.from_pretrained(f"model_files/{config.model_folder}",
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
                                            height=config.height,
@@ -328,21 +335,35 @@ def main():
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" else f"{conf.bert_folder}/{conf.bert_model_name}"
     ## update to latest type classification
     num_labels = 6
-
-    tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
+    if "roberta" in bert_model_name:
+        tokenizer = RobertaTokenizerFast.from_pretrained(bert_model_name)
+    else:
+        tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
 
     if conf.add_new_token:
         print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
         tokenizer.add_tokens('<NUM>', special_tokens=True)
 
     if conf.use_constant:
-        constant2id = {"1": 0, "PI": 1}
-        constant_values = [1.0, 3.14]
-        constant_number = len(constant_values)
+        if "23k" in conf.train_file:
+            constant2id = {"1": 0, "PI": 1}
+            constant_values = [1.0, 3.14]
+            constant_number = len(constant_values)
+        elif "mawps" in conf.train_file:
+            constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
+            constant2id = {c: idx for idx, c in enumerate(constants)}
+            constant_values = [float(c) for c in constants]
+            constant_number = len(constant_values)
+        else:
+            constant2id = None
+            constant_values = None
+            constant_number = 0
     else:
         constant2id = None
         constant_values = None
         constant_number = 0
+    print(f"[Data Info] constant info: {constant2id}")
+
 
     # Read dataset
     if opt.mode == "train":
@@ -373,7 +394,8 @@ def main():
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0))
     else:
         print(f"Testing the model now.")
-        model = UniversalModel.from_pretrained(f"model_files/{conf.model_folder}",
+        MODEL_CLASS = UniversalModel_Roberta if "roberta" in bert_model_name else UniversalModel
+        model = MODEL_CLASS.from_pretrained(f"model_files/{conf.model_folder}",
                                                num_labels=num_labels,
                                                diff_param_for_height=conf.diff_param_for_height,
                                                height = conf.height,
