@@ -37,7 +37,7 @@ The corresponding main file is `mtl_main.py`
 
 #### Old Model for Three-variable Dataset (Deprecated)
 ```shell
-nohup bash run.bash > log 2>&1 &
+nohup bash run_ours.bash > log 2>&1 &
 ```
 The corresponding main file is `main.py`
 

@@ -92,7 +92,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
     constant_num = len(constant_values) if constant_values else 0
-    MODEL_CLASS = UniversalModel_Roberta if "roberta" in bert_model_name else UniversalModel
+    MODEL_CLASS = UniversalModel  if "hfl" in bert_model_name else UniversalModel_Roberta
     model = MODEL_CLASS.from_pretrained(bert_model_name,
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
@@ -335,10 +335,10 @@ def main():
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" else f"{conf.bert_folder}/{conf.bert_model_name}"
     ## update to latest type classification
     num_labels = 6
-    if "roberta" in bert_model_name:
-        tokenizer = RobertaTokenizerFast.from_pretrained(bert_model_name)
-    else:
+    if "hfl" in bert_model_name:
         tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
+    else:
+        tokenizer = RobertaTokenizerFast.from_pretrained(bert_model_name)
 
     if conf.add_new_token:
         print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
@@ -351,6 +351,11 @@ def main():
             constant_number = len(constant_values)
         elif "mawps" in conf.train_file:
             constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
+            constant2id = {c: idx for idx, c in enumerate(constants)}
+            constant_values = [float(c) for c in constants]
+            constant_number = len(constant_values)
+        elif "large_math" in conf.train_file:
+            constants = ['5.0', '10.0', '2.0', '8.0', '30.0', '1.0', '6.0', '7.0', '12.0', '4.0', '31.0', '3.14', '3.0']
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)
@@ -394,7 +399,7 @@ def main():
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0))
     else:
         print(f"Testing the model now.")
-        MODEL_CLASS = UniversalModel_Roberta if "roberta" in bert_model_name else UniversalModel
+        MODEL_CLASS = UniversalModel if "hfl" in bert_model_name else UniversalModel_Roberta
         model = MODEL_CLASS.from_pretrained(f"model_files/{conf.model_folder}",
                                                num_labels=num_labels,
                                                diff_param_for_height=conf.diff_param_for_height,

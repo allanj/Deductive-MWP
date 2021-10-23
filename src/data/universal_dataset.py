@@ -58,7 +58,7 @@ class UniversalDataset(Dataset):
         max_num_steps = 0
         self.insts = []
         filtered_steps = [int(f) for f in filtered_steps] if filtered_steps else None
-        numbert_instances_filtered = 0
+        number_instances_filtered = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if not (obj['legal'] and obj['num_steps'] <= 2):
             #     continue
@@ -66,7 +66,7 @@ class UniversalDataset(Dataset):
                 continue
             if filtered_steps and obj['num_steps'] in filtered_steps:
                 ## in experiments, we can choose to filter some questions with specific steps
-                numbert_instances_filtered += 1
+                number_instances_filtered += 1
                 continue
             ## equation preprocessing
             # mapped_equation = obj["mapped_equation"]
@@ -119,7 +119,7 @@ class UniversalDataset(Dataset):
             )
             self.insts.append(obj)
         print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}")
+              f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}")
 
     def read_math23k_file(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
@@ -134,14 +134,17 @@ class UniversalDataset(Dataset):
         max_num_steps = 0
         self.insts = []
         num_index_error = 0
-        numbert_instances_filtered = 0
+        number_instances_filtered = 0
+        number_instances_more_than_max_height_filtered= 0
         num_step_count = Counter()
         num_empty_equation = 0
         max_intermediate_num_for_parallel = 0
         num_mawps_constant_removed = 0
+        not_equal_num = 0
+        answer_calculate_exception = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal":
-                numbert_instances_filtered += 1
+                number_instances_filtered += 1
                 continue
             # if "have_constant" in obj and obj["have_constant"]:
             #     num_mawps_constant_removed += 1
@@ -219,7 +222,7 @@ class UniversalDataset(Dataset):
             # compute_value(labels, obj["num_list"])
 
             if len(labels) > 10 and "test" in file:
-                numbert_instances_filtered += 1
+                number_instances_more_than_max_height_filtered += 1
                 continue
             if "parallel" in file:
                 for equations in labels:
@@ -234,10 +237,16 @@ class UniversalDataset(Dataset):
                 num_index_error += 1
                 obj['type_str'] = "illegal"
                 continue
-            if self.use_incremental_labeling:
-                res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
-            else:
-                res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+            try:
+                if self.use_incremental_labeling:
+                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                else:
+                    res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+            except:
+                print("answer calculate exception")
+                answer_calculate_exception += 1
+                obj['type_str'] = "illegal"
+                continue
 
             diff = res - float(obj["answer"])
             try:
@@ -247,6 +256,9 @@ class UniversalDataset(Dataset):
                     assert math.fabs(diff) < 1e-4
             except:
                 print("not equal", flush=True)
+                not_equal_num += 1
+                obj['type_str'] = "illegal"
+                continue
             label_height_mask = [1] * len(labels)
             num_step_count[len(labels)] += 1
 
@@ -264,12 +276,14 @@ class UniversalDataset(Dataset):
             )
             self.insts.append(obj)
         print(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, numbert_instances_filtered: {numbert_instances_filtered}, num_index_error: {num_index_error}")
+              f"max num steps: {max_num_steps}, numbet_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
         print(f"max intermeidate num for parallel: {max_intermediate_num_for_parallel}")
         print(f"num mawps constant removed: {num_mawps_constant_removed}")
+        print(f"totla number of answer not equal: {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
+        print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
         print(num_step_count)
-        # out_file = file.split(".json")[0] + "_baseline.json"
-        # write_data(file=out_file, data= data)
+        ### out_file = "../../data/large_math/mwp_processed_filtered.json"
+        ### write_data(file=out_file, data= data)
 
     def __len__(self) -> int:
         return len(self._features)
@@ -363,8 +377,6 @@ class UniversalDataset(Dataset):
         num_constant = len(self.constant2id) if self.constant2id is not None else 0
         for l_idx, layer in enumerate(equation_layers):
             left_var, right_var, op = layer
-            if left_var == right_var:
-                print("found not same")
             if left_var == right_var and (not add_replacement):
                 return None
             is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
@@ -486,27 +498,10 @@ class UniversalDataset(Dataset):
         return results
 
 
-if __name__ == '__main__':
-    from transformers import BertTokenizer, RobertaTokenizerFast
-    from src.eval.utils import is_value_correct
-    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
-    # dataset = UniversalDataset(file="../../data/complex/mwp_processed_train.json", tokenizer=tokenizer)
-    # constant2id = {"1": 0, "PI": 1}
-    # constant_values = [1.0, 3.14]
+def main_for_mawps():
     constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-    add_replacement = True
-    use_incremental_labeling = True
-    # UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    # UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    # UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
     tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
     UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
@@ -517,54 +512,43 @@ if __name__ == '__main__':
     UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    ### Parallel testing
-    # test_set = UniversalDataset(file="../../data/math23k/test23k_parallel_sorted.json", tokenizer=tokenizer,
+
+def main_for_math23k():
+    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
+    constant2id = {"1": 0, "PI": 1}
+    constant_values = [1.0, 3.14]
+    UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+
+def main_for_ours():
+    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
+    constants = ['5.0', '10.0', '2.0', '8.0', '30.0', '1.0', '6.0', '7.0', '12.0', '4.0', '31.0', '3.14', '3.0']
+    constant2id = {c: idx for idx, c in enumerate(constants)}
+    constant_values = [float(c) for c in constants]
+    UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    # UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
     #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    # train_set = UniversalDataset(file="../../data/math23k/train23k_parallel_sorted.json", tokenizer=tokenizer,
+    # UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
-    # valid_set = UniversalDataset(file="../../data/math23k/valid23k_parallel_sorted.json", tokenizer=tokenizer,
-    #                              constant2id=constant2id, constant_values=constant_values,
-    #                              add_replacement=add_replacement,
-    #                              use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
-    # valid_set = UniversalDataset(file="../../data/math23k/debug_parallel.json", tokenizer=tokenizer,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    # UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, number=-1)
-    # from torch.utils.data import DataLoader
-    # loader  = DataLoader(valid_set, batch_size=30, collate_fn=valid_set.collate_parallel_without_intermediate_pad)
-    # # exit(0)
-    # for batch_idx, batch in tqdm(enumerate(loader), total=len(loader)):
-    #     ## TODO: check retrieve the label from loader and get back the results.
-    #     pass
-    #     # continue
-    #     # print(batch.labels[0])
-    #     # if batch_idx == 191:
-    #     #     print(batch_idx)
-    #     insts = loader.dataset._features[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
-    #     objs = loader.dataset.insts[batch_idx*(loader.batch_size):(batch_idx+1)*(loader.batch_size)]
-    #     num_variables = batch.num_variables.cpu().numpy().tolist()  # batch_size
-    #     max_num_variable = max(num_variables)
-    #     batched_labels = batch.labels  ## (batch_size, max_height,  num_combinations, num_op_labels, 2)
-    #     all_transform_labels = get_transform_labels_from_batch_labels_without_intermediate_pad(batched_labels, max_num_variable,constant_values=constant_values, add_empty_transform_labels=False)
-    #
-    #     for b_idx, transformed_labels in enumerate(all_transform_labels):
-    #         checker = is_value_correct(transformed_labels, insts[b_idx].labels, objs[b_idx]["num_list"], num_constant=2,
-    #                          constant_values=constant_values,
-    #                          consider_multiple_m0=True, use_parallel_equations=True)
-    #         value = checker[1]
-    #         try:
-    #             diff = math.fabs(objs[b_idx]["answer"] - value)
-    #             assert diff < 0.001
-    #         except:
-    #             print(checker)
-    #             print(objs[b_idx]["answer"])
-    #
-    #         # print(checker)
-    #         try:
-    #             assert checker[0]
-    #         except:
-    #             print(insts[b_idx].labels)
-    #             print(transformed_labels)
-    #             print(objs[b_idx]["id"], batch_idx, b_idx)
-    #             print("error")
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+
+if __name__ == '__main__':
+    from transformers import BertTokenizer, RobertaTokenizerFast
+    add_replacement = True
+    use_incremental_labeling = True
+    # main_for_mawps()
+    main_for_ours()
+
