@@ -9,6 +9,8 @@ from transformers.modeling_outputs import (
 from dataclasses import dataclass
 from typing import Optional, List
 
+from src.model.beam_search_scorer import BeamSearchScorer, get_initial_hypotheses
+
 @dataclass
 class UniversalOutput(ModelOutput):
     """
@@ -334,22 +336,231 @@ class UniversalModel(BertPreTrainedModel):
                         best_mi_scores = mi_logits[b_idxs, best_comb, best_label][:, 0]
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
-                    ## NOTE: add loosss
-                    if labels is not None and not is_eval:
-                        mi_gold_labels = labels[:, i, :]  ## batch_size x 4 (left_var_index, right_var_index, label_index, stop_id)
-                        mi_gold_comb = mi_gold_labels[:, :2].unsqueeze(1).expand(batch_size, num_combinations, 2)
-                        batched_comb = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
-                        judge = mi_gold_comb == batched_comb
-                        judge = judge[:, :, 0] * judge[:, :, 1]  # batch_size, num_combinations
-                        judge = judge.nonzero()[:, 1]  # batch_size
 
-                        mi_gold_scores = mi_combined_logits[b_idxs, judge, mi_gold_labels[:, 2], mi_gold_labels[:, 3]]  ## batch_size
-                        height_mask = label_height_mask[:, i]  ## batch_size
-                        current_loss = (best_mi_score - mi_gold_scores) * height_mask  ## avoid compute loss for unnecessary height
-                        loss = loss + current_loss.sum()
-                        best_mi_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]]  ## teacher-forcing.
-                    else:
-                        best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
+    def beam_search(self,
+        input_ids=None, ## batch_size  x max_seq_length
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        variable_indexs_start: torch.Tensor = None, ## batch_size x num_variable
+        variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
+        num_variables: torch.Tensor = None, # batch_size [3,4]
+        variable_index_mask:torch.Tensor = None, # batch_size x num_variable
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        ## (batch_size, height, 4). (left_var_index, right_var_index, label_index, stop_label) when height>=1, left_var_index always -1, because left always m0
+        label_height_mask = None, #  (batch_size, height)
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        is_eval=False,
+        num_beams:int = 1
+    ):
+        r"""
+                labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+                    Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
+                    config.num_labels - 1]`. If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
+                    If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+                """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        outputs = self.bert( # batch_size, sent_len, hidden_size,
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        batch_size, sent_len, hidden_size = outputs.last_hidden_state.size()
+        if labels is not None and not is_eval:
+            # is_train
+            _, max_height, _ = labels.size()
+        else:
+            max_height = self.max_height
+
+        _, max_num_variable = variable_indexs_start.size()
+
+        var_sum = (variable_indexs_start - variable_indexs_end).sum() ## if add <NUM>, we can just choose one as hidden_states
+        var_start_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_start.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
+        if var_sum != 0:
+            var_end_hidden_states = torch.gather(outputs.last_hidden_state, 1, variable_indexs_end.unsqueeze(-1).expand(batch_size, max_num_variable, hidden_size))
+            var_hidden_states = var_start_hidden_states + var_end_hidden_states
+        else:
+            var_hidden_states = var_start_hidden_states
+        if self.constant_num > 0:
+            constant_hidden_states = self.const_rep.unsqueeze(0).expand(batch_size, self.constant_num, hidden_size)
+            var_hidden_states = torch.cat([constant_hidden_states, var_hidden_states], dim=1)
+            num_variables = num_variables + self.constant_num
+            max_num_variable = max_num_variable + self.constant_num
+            const_idx_mask = torch.ones((batch_size, self.constant_num), device=variable_indexs_start.device)
+            variable_index_mask = torch.cat([const_idx_mask, variable_index_mask], dim = 1)
+
+            # updated_all_states, _ = self.multihead_attention(var_hidden_states, var_hidden_states, var_hidden_states,key_padding_mask=variable_index_mask)
+            # var_hidden_states = torch.cat([updated_all_states[:, :2, :], var_hidden_states[:, 2:, :]], dim=1)
+
+        best_mi_label_rep = None
+        loss = 0
+        all_logits = []
+        b_idxs = torch.tensor([k for k in range(batch_size)]).long()
+        best_mi_scores = None
+
+        beam_scorer = BeamSearchScorer(
+            batch_size=batch_size,
+            num_beams=num_beams,
+            device=var_hidden_states.device
+        )
+
+        beam_scores = torch.zeros((batch_size, num_beams), dtype=torch.float, device=input_ids.device)
+        beam_scores[:, 1:] = -1e9
+        beam_scores = beam_scores.view((batch_size * num_beams,))
+
+
+
+        for i in range(max_height):
+            linear_modules = self.linears[i] if self.diff_param_for_height else self.linears
+            if i == 0:
+                ## max_num_variable = 4. -> [0,1,2,3]
+                num_var_range = torch.arange(0, max_num_variable, device=variable_indexs_start.device)
+                ## 6x2 matrix
+                combination = torch.combinations(num_var_range, r=2, with_replacement=self.add_replacement)  ##number_of_combinations x 2
+                num_combinations, _ = combination.size()  # number_of_combinations x 2
+                # batch_size x num_combinations. 2*6
+                batched_combination_mask = get_combination_mask(batched_num_variables=num_variables, combination=combination)  # batch_size, num_combinations
+
+                var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_combinations * 2, hidden_size))
+                # m0_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size, num_combinations, 2, hidden_size * 3).sum(dim=-2)
+                expanded_var_comb_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size,  num_combinations, 2, hidden_size)
+                m0_hidden_states = torch.cat(
+                    [expanded_var_comb_hidden_states[:, :, 0, :], expanded_var_comb_hidden_states[:, :, 1, :],
+                     expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
+                # batch_size, num_combinations/num_m0, hidden_size: 2,6,768
+
+                ## batch_size, num_combinations/num_m0, num_labels, hidden_size
+                m0_label_rep = torch.stack([layer(m0_hidden_states) for layer in linear_modules], dim=2)
+                ## batch_size, num_combinations/num_m0, num_labels
+                m0_logits = self.label_rep2label(m0_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
+                m0_logits = m0_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                ## batch_size, num_combinations/num_m0, num_labels, 2
+                m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
+
+                var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+                expanded_var_scores = torch.gather(var_scores, 1, combination.unsqueeze(0).expand(batch_size, num_combinations, 2).view(batch_size, -1)).unsqueeze(-1).view(batch_size, num_combinations, 2)
+                expanded_var_scores = expanded_var_scores.sum(dim=-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2)
+
+                ## batch_size, num_combinations/num_m0, num_labels, 2
+                m0_combined_logits = m0_logits + m0_stopper_logits + expanded_var_scores
+
+                all_logits.append(m0_combined_logits)
+                best_temp_logits, best_stop_label =  m0_combined_logits.max(dim=-1) ## batch_size, num_combinations/num_m0, num_labels
+                best_temp_score, best_temp_label = best_temp_logits.max(dim=-1) ## batch_size, num_combinations
+                best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
+                best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
+
+                m0_combined_scores = nn.functional.log_softmax(
+                    m0_combined_logits.view(batch_size, -1), dim=-1
+                )
+                top_k_values, top_k_index = m0_combined_scores.topk(k=2 * num_beams, dim=-1, largest=True, sorted=True) ## batch_size x beam_size
+                ## Note: we want to get.
+                ## Note: current_best_beam: (batch_size, beam_size, 4 ](left_idx, right_idx, label_id, stop_id)
+
+                best_a = torch.floor(top_k_index / (self.num_labels * 2)).long() ## comb_id. batch_size x 2 beamsize
+                best_b = torch.floor((top_k_index - self.num_labels * 2 *best_a)/2).long() ## label_id. batch_size x 2 beam_size
+                best_c = torch.remainder(top_k_index, 2).long() #2: stop id, batch_size x 2 beam_size
+
+                batch_comb = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
+                best_comb = batch_comb[b_idxs.repeat_interleave(num_beams), best_a.view(-1)].view(batch_size, num_beams, 2)
+
+                # # current_best_beam: (batch_size, beam_size, 4 ), after unsqueeze -> (batch_size, beam_size, 1, 4)  1-> height
+                # current_best_beam = torch.cat([best_comb, best_b.unsqueeze(-1), best_c.unsqueeze(-1)], dim=-1).unsqueeze(2)
+
+                # current_best_beam: (batch_size, 2 * beam_size, 4 )
+                current_best_beam = torch.cat([best_comb, best_b.unsqueeze(-1), best_c.unsqueeze(-1)], dim=-1)
+
+
+                next_beam_scores, next_beam_labels, next_beam_comb = get_initial_hypotheses(current_best_beam=current_best_beam,
+                                                                            best_comb=best_a,
+                                                                            num_beams=num_beams,
+                                                                            scores = top_k_values,
+                                                                            device=current_best_beam.device)
+
+                # best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label] # batch_size x hidden_size
+                # best_mi_label_rep = best_m0_label_rep
+                # best_mi_scores = m0_logits[b_idxs, best_comb, best_label][:, 0]  # batch_size
+
+                ## batch_size x beam_size, hidden size
+                best_mi_label_rep = m0_label_rep[b_idxs.repeat_interleave(num_beams), next_beam_comb.view(-1), next_beam_labels[:, :, 2].view(-1)]
+                best_mi_beam_scores = next_beam_scores
+
+                current_beam_scores = next_beam_scores ## batch_size, num_beams
+                current_beam_labels = next_beam_labels
+                current_beam_comb = next_beam_comb
+            else:
+
+                var_hidden_states = var_hidden_states.repeat_interleave(num_beams, dim=0)
+
+                ## update hidden_state (gated hidden state)
+                init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size * num_beams, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
+                gru_inputs = var_hidden_states.view(-1, hidden_size)
+                var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size  * num_beams, max_num_variable + i - 1, hidden_size)
+
+                num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
+                ## 6x2 matrix
+                combination = torch.combinations(num_var_range, r=2, with_replacement=self.add_replacement)  ##number_of_combinations x 2
+                num_combinations, _ = combination.size()  # number_of_combinations x 2
+                batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i, combination=combination)
+                batched_combination_mask = batched_combination_mask.repeat_interleave(num_beams, dim=0)
+
+                var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
+                var_comb_hidden_states = torch.gather(var_hidden_states, 1, combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size  * num_beams, num_combinations * 2, hidden_size))
+                expanded_var_comb_hidden_states = var_comb_hidden_states.unsqueeze(-2).view(batch_size * num_beams, num_combinations, 2, hidden_size)
+                mi_hidden_states = torch.cat(
+                    [expanded_var_comb_hidden_states[:, :, 0, :], expanded_var_comb_hidden_states[:, :, 1, :],
+                     expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]], dim=-1)
+                mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
+                mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size * num_beams, num_combinations, self.num_labels, 2)
+                mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size * num_beams, num_combinations, self.num_labels, 2).log()
+
+                mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
+                var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+                expanded_var_scores = torch.gather(var_scores, 1, combination.unsqueeze(0).expand(batch_size * num_beams, num_combinations, 2).view(batch_size * num_beams, -1)).unsqueeze(-1).view(batch_size * num_beams, num_combinations, 2)
+                expanded_var_scores = expanded_var_scores.sum(dim=-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size * num_beams, num_combinations, self.num_labels, 2)
+
+                ## batch_size * num_beams, num_combinations/num_m0, num_labels, 2
+                mi_combined_logits = mi_logits + mi_stopper_logits + expanded_var_scores
+                all_logits.append(mi_combined_logits)
+                # best_temp_logits, best_stop_label = mi_combined_logits.max(dim=-1)  ## batch_size, num_combinations/num_m0, num_labels
+                # best_temp_score, best_temp_label = best_temp_logits.max(dim=-1)  ## batch_size, num_combinations
+                # best_mi_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
+                # best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
+
+                ## batch_size, num_beams, (num_combinations/num_m0 *  num_labels * 2)
+                mi_combined_scores = nn.functional.log_softmax(
+                    mi_combined_logits.view(batch_size, num_beams, -1), dim=-1
+                )
+                if i == max_height - 1:
+                    ## if reaching max height, set to stop
+                    viewed_scores = mi_combined_scores.view(batch_size, num_beams, num_combinations, self.num_labels, 2)
+                    viewed_scores[:, :, :, :, 0] = -float("inf")
+                    viewed_scores[:, :, :, :, 1] = 0
+                    mi_combined_scores = viewed_scores.view(batch_size, num_beams, -1)
+
+                mi_beam_added_score = mi_combined_scores + current_beam_scores.unsqueeze(-1).expandas(mi_combined_scores)
+                top_k_values, top_k_index = mi_beam_added_score.view(batch_size, -1).topk(k=2 * num_beams, dim=-1)  ## batch_size x 2*beam_size
+
+                best_a = torch.floor(top_k_index / (self.num_labels * 2)).long() ## comb_id. batch_size x 2 beamsize
+                best_b = torch.floor((top_k_index - self.num_labels * 2 * best_a) / 2).long()  ## label_id. batch_size x 2 beam_size
+                best_c = torch.remainder(top_k_index, 2).long()  # 2: stop id, batch_size x 2 beam_size
+
+                batch_comb = combination.unsqueeze(0).expand(batch_size * num_beams, num_combinations, 2)
+                best_comb = batch_comb[b_idxs.repeat_interleave(num_beams), best_a.view(-1)].view(batch_size, num_beams, 2)
+
+
+                best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
+                best_mi_scores = mi_logits[b_idxs, best_comb, best_label][:, 0]
 
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
