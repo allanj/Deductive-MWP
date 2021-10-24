@@ -134,6 +134,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True).loss
+            if config.parallel:
+                loss = loss.sum()
             if config.fp16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -249,7 +251,8 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
-                all_logits = model(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                module = model.module if hasattr(model, 'module') else model
+                all_logits = module(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
                              token_type_ids=feature.token_type_ids.to(dev),
                              variable_indexs_start=feature.variable_indexs_start.to(dev),
                              variable_indexs_end=feature.variable_indexs_end.to(dev),
