@@ -183,9 +183,8 @@ class BeamSearchScorer:
         # fill with hypotheses and eos_token_id if the latter fits in
         for i, cur_best in enumerate(batch_best):
             for j, hypo in enumerate(cur_best):
-                decoded[i, : heights[i,j]] = hypo
-                if heights[i, j] < max_height:
-                    decoded[i, heights[i, j] - 1][-1] = 1
+                decoded[i, j, :heights[i,j]] = hypo
+                decoded[i, j, heights[i, j] - 1][-1] = 1
         return UserDict(
             {
                 "decoded": decoded,

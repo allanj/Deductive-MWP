@@ -745,11 +745,16 @@ def test_case_batch_two_mutiple_m0():
 
 def test_beam_search():
     import random
+    import numpy as np
     random.seed(42)
+    torch.manual_seed(42)
+    np.random.seed(42)
+
     model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=2, diff_param_for_height = False,
                  height= 6,
                  add_replacement= True,
                  consider_multiple_m0 = True)
+    model.eval()
     from transformers import BertTokenizer
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     uni_labels = [
