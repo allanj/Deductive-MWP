@@ -143,6 +143,8 @@ class UniversalDataset(Dataset):
         not_equal_num = 0
         answer_calculate_exception = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
+            # if obj['id'] != '155463083': #61780956 155463083 157050803
+            #     continue DEBUGGING code
             if obj['type_str'] != "legal":
                 number_instances_filtered += 1
                 continue

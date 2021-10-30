@@ -22,7 +22,8 @@ class BeamSearchScorer:
         self._is_init = False
         self._beam_hyps = [
             BeamHypotheses(
-                num_beams=self.num_beams
+                num_beams=self.num_beams,
+                length_penalty=self.length_penalty
             )
             for _ in range(batch_size)
         ]
@@ -44,7 +45,7 @@ class BeamSearchScorer:
         next_labels: torch.LongTensor,
         next_comb_idx: torch.Tensor,
         best_previous_beam_indices: torch.LongTensor,
-    ) -> UserDict[str, torch.Tensor]:
+    ) -> UserDict:
         """
 
         :param current_best_beam:  (batch_size, 2 * beam_size, height, 4 )
@@ -72,10 +73,10 @@ class BeamSearchScorer:
         for batch_idx, beam_hyp in enumerate(self._beam_hyps):
             beam_hyp = self._beam_hyps[batch_idx]
             if self._done[batch_idx]:
-                assert (
-                    len(beam_hyp) >= self.num_beams
-                ), f"Batch can only be done if at least {self.num_beams} beams have been generated"
-                next_beam_scores[batch_idx, :] = 0
+                # assert (
+                #     len(beam_hyp) >= self.num_beams
+                # ), f"Batch can only be done if at least {self.num_beams} beams have been generated"
+                next_beam_scores[batch_idx, :] = -10000
                 next_beam_labels[batch_idx, :, :] = 0
                 next_beam_comb[batch_idx, :] = 0
                 next_beam_indices[batch_idx, :] = 0
@@ -90,6 +91,13 @@ class BeamSearchScorer:
                     is_beam_token_worse_than_top_num_beams = beam_rank >= self.num_beams
                     if is_beam_token_worse_than_top_num_beams:
                         continue
+                    ## check stop = 0 in previous labels
+                    non_stop_next_label = next_label.clone()
+                    non_stop_next_label[-1] = 0
+                    idx = ((non_stop_next_label.unsqueeze(0).expand(next_labels[batch_idx].size(0), 4) == next_labels[batch_idx]).sum(dim=-1) == 4).nonzero()
+                    if len(idx) != 0:
+                        if idx[0,0] < beam_rank:
+                            continue
                     if current_best_beam is not None:
                         beam_hyp.add(
                             torch.cat([current_best_beam[batch_idx, best_previous_beam_idx], next_label.unsqueeze(0)], dim=0).long(),
@@ -100,7 +108,22 @@ class BeamSearchScorer:
                             next_label.unsqueeze(0).long(),
                             next_score.item(),
                         )
+
+                    # next_beam_scores[batch_idx, beam_idx] = next_score
+                    # next_beam_labels[batch_idx, beam_idx] = next_label
+                    # next_beam_indices[batch_idx, beam_idx] = best_previous_beam_idx
+                    # next_beam_comb[batch_idx, beam_idx] = best_next_comb_idx
+                    # beam_idx += 1
+
                 else:
+                    # check stop = 1 in previous labels
+                    stop_next_label = next_label.clone()
+                    stop_next_label[-1] = 1
+                    idx = ((stop_next_label.unsqueeze(0).expand(next_labels[batch_idx].size(0), 4) == next_labels[batch_idx]).sum(dim=-1) == 4).nonzero()
+                    if len(idx) != 0:
+                        if idx[0, 0] < beam_rank:
+                            continue
+
                     # add next predicted token since it is not eos_token
                     next_beam_scores[batch_idx, beam_idx] = next_score
                     next_beam_labels[batch_idx, beam_idx] = next_label
@@ -138,7 +161,7 @@ class BeamSearchScorer:
         current_best_beam: Union[torch.Tensor, None],
         final_beam_scores: torch.FloatTensor,
         max_height: int,
-    ) -> UserDict[str, torch.LongTensor]:
+    ) -> UserDict:
         batch_size = len(self._beam_hyps)
 
         # finalize all open beam hypotheses and add to generated hypotheses
@@ -157,12 +180,13 @@ class BeamSearchScorer:
         heights = current_best_beam.new(batch_size, self.num_beam_hyps_to_keep)
         batch_best = []
         best_scores = torch.zeros((batch_size, self.num_beam_hyps_to_keep), device=self.device, dtype=torch.float32)
+        best_scores.fill_(-1000)
 
         # retrieve best hypotheses
         for i, beam_hyp in enumerate(self._beam_hyps):
             sorted_hyps = sorted(beam_hyp.beams, key=lambda x: x[0])
             best = []
-            for j in range(self.num_beam_hyps_to_keep):
+            for j in range(min(self.num_beam_hyps_to_keep, len(sorted_hyps))):
                 best_hyp_tuple = sorted_hyps.pop()
                 best_score = best_hyp_tuple[0]
                 best_hyp = best_hyp_tuple[1]
@@ -194,12 +218,13 @@ class BeamSearchScorer:
 
 
 class BeamHypotheses:
-    def __init__(self, num_beams: int):
+    def __init__(self, num_beams: int, length_penalty: float):
         """
         Initialize n-best list of hypotheses.
         """
         # self.length_penalty = length_penalty
         self.num_beams = num_beams
+        self.length_penalty = length_penalty
         self.beams = []
         self.worst_score = 1e9
 
@@ -213,7 +238,7 @@ class BeamHypotheses:
         """
         Add a new hypothesis to the list.
         """
-        score = sum_logprobs / (hyp.shape[-2]) ## height.
+        score = sum_logprobs / (hyp.shape[-2] ** self.length_penalty) ## height.
         if len(self) < self.num_beams or score > self.worst_score:
             self.beams.append((score, hyp))
             if len(self) > self.num_beams:
@@ -232,6 +257,6 @@ class BeamHypotheses:
         if len(self) < self.num_beams:
             return False
         else:
-            cur_score = best_sum_logprobs / cur_len
+            cur_score = best_sum_logprobs / (cur_len** self.length_penalty)
             ret = self.worst_score >= cur_score
             return ret

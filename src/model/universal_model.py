@@ -409,7 +409,8 @@ class UniversalModel(BertPreTrainedModel):
         beam_scorer = BeamSearchScorer(
             batch_size=batch_size,
             num_beams=num_beams,
-            device=var_hidden_states.device
+            device=var_hidden_states.device,
+            length_penalty=1
         )
 
         # beam_scores = torch.zeros((batch_size, num_beams), dtype=torch.float, device=input_ids.device)
@@ -453,15 +454,17 @@ class UniversalModel(BertPreTrainedModel):
                 m0_combined_logits = m0_logits + m0_stopper_logits + expanded_var_scores
 
                 all_logits.append(m0_combined_logits)
-                best_temp_logits, best_stop_label =  m0_combined_logits.max(dim=-1) ## batch_size, num_combinations/num_m0, num_labels
-                best_temp_score, best_temp_label = best_temp_logits.max(dim=-1) ## batch_size, num_combinations
-                best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
-                best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
+                # best_temp_logits, best_stop_label =  m0_combined_logits.max(dim=-1) ## batch_size, num_combinations/num_m0, num_labels
+                # best_temp_score, best_temp_label = best_temp_logits.max(dim=-1) ## batch_size, num_combinations
+                # best_m0_score, best_comb = best_temp_score.max(dim=-1) ## batch_size
+                # best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)## batch_size
+
+
 
                 m0_combined_scores = nn.functional.log_softmax(
                     m0_combined_logits.view(batch_size, -1), dim=-1
                 )
-                top_k_values, top_k_index = m0_combined_scores.topk(k=2 * num_beams, dim=-1, largest=True, sorted=True) ## batch_size x 2beam_size
+                top_k_values, top_k_index = m0_combined_scores.view(batch_size, -1).topk(k=2 * num_beams, dim=-1, largest=True, sorted=True) ## batch_size x 2beam_size
                 ## Note: we want to get.
                 ## Note: current_best_beam: (batch_size, beam_size, 4 ](left_idx, right_idx, label_id, stop_id)
 
@@ -502,6 +505,7 @@ class UniversalModel(BertPreTrainedModel):
                 previous_beam_scores = next_beam_scores ## batch_size, num_beams
                 previous_beam_comb_idx = next_beam_comb_idx
                 current_beam_labels = next_beam_labels.unsqueeze(-2)  ## batch_size, self.num_beams, 1, 4
+                initial_comb_num = num_combinations
             else:
 
 
@@ -540,13 +544,23 @@ class UniversalModel(BertPreTrainedModel):
                 # best_mi_score, best_comb = best_temp_score.max(dim=-1)  ## batch_size
                 # best_label = torch.gather(best_temp_label, 1, best_comb.unsqueeze(-1)).squeeze(-1)  ## batch_size
 
-                ## batch_size, num_beams, (num_combinations/num_m0 *  num_labels * 2)
+                ## (batch_size, num_beams, top_initial_comb_num * num_labels * 2)
+                de_number = initial_comb_num * self.num_labels *2
+                mi_combined_logits_top_comb, mi_combined_logits_top_comb_idx = mi_combined_logits.view(batch_size, num_beams, -1).topk(k=de_number,  dim=2, largest=True, sorted=True)
+                offset = torch.arange(num_beams, device=mi_combined_logits.device).unsqueeze(0).unsqueeze(-1).expand(batch_size, num_beams, de_number) * (num_combinations * self.num_labels *2)
+                mi_combined_logits_top_comb_idx = mi_combined_logits_top_comb_idx + offset
+                mi_combined_logits = mi_combined_logits_top_comb
+
+                # batch_size, num_beams, (num_combinations/num_m0 *  num_labels * 2)
                 mi_combined_scores = nn.functional.log_softmax(
                     mi_combined_logits.view(batch_size, num_beams, -1), dim=-1
                 )
-
-                mi_beam_added_score = mi_combined_scores + previous_beam_scores.unsqueeze(-1).expand_as(mi_combined_scores)
+                # mi_combined_scores = mi_combined_scores + torch.log(torch.ones(mi_combined_scores.size(), device=mi_combined_scores.device) * 1.2)
+                transformed_previous_beam_scores = previous_beam_scores.unsqueeze(-1).expand_as(mi_combined_scores.view(batch_size, num_beams, -1))#.contiguous().view(batch_size, -1)
+                mi_beam_added_score = mi_combined_scores + transformed_previous_beam_scores
                 top_k_values, top_k_index = mi_beam_added_score.view(batch_size, -1).topk(k=2 * num_beams, dim=-1)  ## batch_size x 2*beam_size
+
+                top_k_index = torch.gather(mi_combined_logits_top_comb_idx.view(batch_size, -1), 1, top_k_index)
 
                 best_previous_beam_idx = torch.floor(top_k_index / (num_combinations * self.num_labels * 2)).long()
                 temp = top_k_index - num_combinations * self.num_labels * 2 * best_previous_beam_idx
@@ -590,7 +604,7 @@ class UniversalModel(BertPreTrainedModel):
                 previous_beam_scores = next_beam_scores  ## batch_size, num_beams
                 target_current_beam_labels = torch.gather(current_beam_labels, 1, next_best_previous_beam_indices.unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_beams, i, 4))
                 current_beam_labels = torch.cat([target_current_beam_labels, next_beam_labels.unsqueeze(-2)], dim=-2)
-
+                prev_comb_num = num_combinations
                 if beam_scorer.is_done:
                     break
 
@@ -601,7 +615,7 @@ class UniversalModel(BertPreTrainedModel):
         )
 
 
-        return final_res["decoded"]
+        return final_res["decoded"], final_res["best_scores"]
 
 
 
@@ -750,8 +764,8 @@ def test_beam_search():
     torch.manual_seed(42)
     np.random.seed(42)
 
-    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=2, diff_param_for_height = False,
-                 height= 6,
+    model = UniversalModel.from_pretrained('model_files/ours_fp16_best', num_labels=6, constant_num=13, diff_param_for_height = False,
+                 height= 10,
                  add_replacement= True,
                  consider_multiple_m0 = True)
     model.eval()
@@ -782,6 +796,27 @@ def test_beam_search():
     print(res[0])
     print(res[1])
 
-
+    from universal_main import get_batched_prediction_consider_multiple_m0
+    from src.data.universal_dataset import UniFeature
+    res = model(input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                variable_indexs_start=variable_indexs_start,
+                variable_indexs_end=variable_indexs_end,
+                num_variables=num_variables,
+                variable_index_mask=variable_index_mask)
+    feature = UniFeature(variable_indexs_start=variable_indexs_start,input_ids=input_ids,
+                         attention_mask=attention_mask)
+    batched_prediction = get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=res.all_logits,
+                                                constant_num=13,
+                                                add_replacement=True)
+    ## post process remve extra
+    for b, inst_predictions in enumerate(batched_prediction):
+        for p, prediction_step in enumerate(inst_predictions):
+            left, right, op_id, stop_id = prediction_step
+            if stop_id == 1:
+                batched_prediction[b] = batched_prediction[b][:(p + 1)]
+                break
+    print(batched_prediction)
 if __name__ == '__main__':
     test_beam_search()
