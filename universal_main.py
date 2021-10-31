@@ -57,6 +57,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     #                     help="The bert model name to used")
     parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
     parser.add_argument('--height', type=int, default=10, help="the model height")
+    parser.add_argument('--train_max_height', type=int, default=100, help="the maximum height for training data")
     parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
     # training
@@ -318,7 +319,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     err = []
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
-        is_value_corr, predict_value, gold_value, pred_ground_equation, gold_ground_equation = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
+        is_value_corr, predict_value, gold_value, pred_ground_equation, gold_ground_equation = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, uni_labels=uni_labels, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
         val_corr += 1 if is_value_corr else 0
         if is_value_corr:
             num_label_step_val_corr[len(inst_labels)] += 1
@@ -375,6 +376,11 @@ def main():
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)
+        elif "MathQA" in conf.train_file:
+            constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416', '3.6', '0.25', '5.0', '6.0', '360.0', '52.0', '180.0']
+            constant2id = {c: idx for idx, c in enumerate(constants)}
+            constant_values = [float(c) for c in constants]
+            constant_number = len(constant_values)
         else:
             constant2id = None
             constant_values = None
@@ -391,11 +397,13 @@ def main():
         print("[Data Info] Reading training data", flush=True)
         dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
+                                   data_max_height=opt.train_max_height)
         print("[Data Info] Reading validation data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
+                                        data_max_height=conf.height)
 
 
         # Prepare data loader
@@ -425,7 +433,7 @@ def main():
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token))
+                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
         os.makedirs("results", exist_ok=True)

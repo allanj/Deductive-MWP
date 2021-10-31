@@ -32,7 +32,8 @@ class UniversalDataset(Dataset):
                  constant2id: Dict[str, int] = None,
                  constant_values: List[float] = None,
                  use_incremental_labeling: bool = False,
-                 add_new_token: bool = False) -> None:
+                 add_new_token: bool = False,
+                 data_max_height: int = 100) -> None:
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values
@@ -40,6 +41,7 @@ class UniversalDataset(Dataset):
         self.use_incremental_labeling = use_incremental_labeling
         self.add_new_token = add_new_token
         self.add_replacement = add_replacement
+        self.data_max_height = data_max_height
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -223,7 +225,7 @@ class UniversalDataset(Dataset):
                 continue
             # compute_value(labels, obj["num_list"])
 
-            if len(labels) > 10 and "test" in file:
+            if len(labels) > self.data_max_height:
                 number_instances_more_than_max_height_filtered += 1
                 continue
             if "parallel" in file:
@@ -241,11 +243,11 @@ class UniversalDataset(Dataset):
                 continue
             try:
                 if self.use_incremental_labeling:
-                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=uni_labels, constant_values=self.constant_values)
                 else:
-                    res = compute_value(labels, obj["num_list"], self.constant_num, constant_values=self.constant_values)
+                    res = compute_value(labels, obj["num_list"], self.constant_num, uni_labels=uni_labels, constant_values=self.constant_values)
             except:
-                print("answer calculate exception")
+                # print("answer calculate exception")
                 answer_calculate_exception += 1
                 obj['type_str'] = "illegal"
                 continue
@@ -255,9 +257,9 @@ class UniversalDataset(Dataset):
                 if float(obj["answer"]) > 1000000:
                     assert math.fabs(diff) < 200
                 else:
-                    assert math.fabs(diff) < 1e-4
+                    assert math.fabs(diff) < 1
             except:
-                print("not equal", flush=True)
+                # print("not equal", flush=True)
                 not_equal_num += 1
                 obj['type_str'] = "illegal"
                 continue
@@ -281,7 +283,7 @@ class UniversalDataset(Dataset):
               f"max num steps: {max_num_steps}, numbet_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
         print(f"max intermeidate num for parallel: {max_intermediate_num_for_parallel}")
         print(f"num mawps constant removed: {num_mawps_constant_removed}")
-        print(f"totla number of answer not equal: {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
+        print(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
         print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
         print(num_step_count)
         ### out_file = "../../data/large_math/mwp_processed_filtered.json"
@@ -386,10 +388,11 @@ class UniversalDataset(Dataset):
                 if self.constant2id is not None and left_var in self.constant2id:
                     left_var_idx = self.constant2id[left_var] + l_idx
                 else:
-                    # try:
-                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
-                    # except:
-                    #     print("seohting")
+                    try:
+                        assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
+                    except:
+                        print(f"[WARNING] find left_var ({left_var}) invalid, returning FALSE")
+                        return None
                     left_var_idx = (ord(left_var) - ord('a') + num_constant + l_idx)
             else:
                 m_idx = int(left_var[2:])
@@ -547,10 +550,39 @@ def main_for_ours():
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
     #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
+
+def main_for_mathqa():
+    # constants = ['3.6', '2.0', '52.0', '3600.0', '12.0', '1.0', '60.0', '0.3937',
+    #              '3.0', '4.0', '3.1416', '1.6', '0.33', '5.0', '360.0', '26.0', '1000.0',
+    #              '100.0', '0.5', '180.0', '0.25', '10.0', '6.0', '0.01745', '0.2778']
+    constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416', '3.6',
+     '0.25', '5.0', '6.0', '360.0', '52.0', '180.0']
+    ###[('100.0', 8184), ('1.0', 5872), ('2.0', 5585), ('3.0', 1803), ('4.0', 1453), ('10.0', 773), ('1000.0', 732),
+    # ('60.0', 621), ('0.5', 595), ('3600.0', 412), ('12.0', 217), ('0.2778', 154), ('3.1416', 134), ('3.6', 104), ('0.25', 64),
+    # ('5.0', 35), ('6.0', 31), ('360.0', 9), ('52.0', 6), ('180.0', 5), ('26.0', 3), ('1.6', 3), ('0.33', 2), ('0.3937', 1)]
+
+    constant2id = {c: idx for idx, c in enumerate(constants)}
+    constant_values = [float(c) for c in constants]
+
+    tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
+    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+
 if __name__ == '__main__':
     from transformers import BertTokenizer, RobertaTokenizerFast
     add_replacement = True
     use_incremental_labeling = True
     # main_for_mawps()
-    main_for_ours()
+    # main_for_ours()
+
+    ## for math qa
+    uni_labels = uni_labels + ['^', '^_rev']
+    main_for_mathqa()
 

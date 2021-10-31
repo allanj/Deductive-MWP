@@ -4,9 +4,9 @@
 import math
 from typing import List
 
-uni_labels = [
-    '+','-', '-_rev', '*', '/', '/_rev'
-]
+# uni_labels = [
+#     '+','-', '-_rev', '*', '/', '/_rev'
+# ]
 
 def compute(left: float, right:float, op:str):
     if op == "+":
@@ -21,10 +21,20 @@ def compute(left: float, right:float, op:str):
         return right - left
     elif op == "/_rev":
         return (right * 1.0 / left) if left != 0 else  (right * 1.0 / 0.001)
+    elif op == "^":
+        try:
+            return math.pow(left, right)
+        except:
+            return 0
+    elif op == "^_rev":
+        try:
+            return math.pow(right, left)
+        except:
+            return 0
     else:
         raise NotImplementedError(f"not implementad for op: {op}")
 
-def compute_value(equations, num_list, num_constant, constant_values: List[float] = None):
+def compute_value(equations, num_list, num_constant, uni_labels, constant_values: List[float] = None):
     current_value = 0
     for equation in equations:
         left_var_idx, right_var_idx, op_idx, _ = equation
@@ -41,7 +51,7 @@ def compute_value(equations, num_list, num_constant, constant_values: List[float
     return current_value
 
 
-def compute_value_for_incremental_equations(equations, num_list, num_constant, constant_values: List[float] = None):
+def compute_value_for_incremental_equations(equations, num_list, num_constant, uni_labels, constant_values: List[float] = None):
     current_value = 0
     store_values = []
     grounded_equations = []
@@ -73,7 +83,7 @@ def compute_value_for_incremental_equations(equations, num_list, num_constant, c
         store_values.append(current_value)
     return current_value, grounded_equations
 
-def compute_value_for_parallel_equations(parallel_equations:List[List], num_list, num_constant, constant_values: List[float] = None):
+def compute_value_for_parallel_equations(parallel_equations:List[List], num_list, num_constant, uni_labels, constant_values: List[float] = None):
     current_value = 0
     store_values = []
     grounded_equations = []
@@ -110,23 +120,23 @@ def compute_value_for_parallel_equations(parallel_equations:List[List], num_list
         accumulate_eqs.append(accumulate_eqs[len(accumulate_eqs) - 1] + len(equations))
     return current_value, grounded_equations
 
-def is_value_correct(predictions, labels, num_list, num_constant, constant_values: List[float] = None, consider_multiple_m0=False, use_parallel_equations: bool = False):
+def is_value_correct(predictions, labels, num_list, num_constant, uni_labels, constant_values: List[float] = None, consider_multiple_m0=False, use_parallel_equations: bool = False):
     pred_grounded_equations = None
     gold_grounded_equations = None
     if consider_multiple_m0:
         if use_parallel_equations:
-            pred_val, pred_grounded_equations = compute_value_for_parallel_equations(predictions, num_list, num_constant, constant_values)
+            pred_val, pred_grounded_equations = compute_value_for_parallel_equations(predictions, num_list, num_constant, uni_labels, constant_values)
         else:
-            pred_val, pred_grounded_equations = compute_value_for_incremental_equations(predictions, num_list, num_constant, constant_values)
+            pred_val, pred_grounded_equations = compute_value_for_incremental_equations(predictions, num_list, num_constant, uni_labels, constant_values)
     else:
-        pred_val = compute_value(predictions, num_list, num_constant, constant_values)
+        pred_val = compute_value(predictions, num_list, num_constant, uni_labels, constant_values)
     if consider_multiple_m0:
         if use_parallel_equations:
-            gold_val, gold_grounded_equations = compute_value_for_parallel_equations(labels, num_list, num_constant, constant_values)
+            gold_val, gold_grounded_equations = compute_value_for_parallel_equations(labels, num_list, num_constant, uni_labels, constant_values)
         else:
-            gold_val, gold_grounded_equations = compute_value_for_incremental_equations(labels, num_list, num_constant,  constant_values)
+            gold_val, gold_grounded_equations = compute_value_for_incremental_equations(labels, num_list, num_constant, uni_labels,  constant_values)
     else:
-        gold_val = compute_value(labels, num_list, num_constant, constant_values)
+        gold_val = compute_value(labels, num_list, num_constant, uni_labels, constant_values)
     if math.fabs((gold_val- pred_val)) < 1e-4:
         return True, pred_val, gold_val, pred_grounded_equations, gold_grounded_equations
     else:
