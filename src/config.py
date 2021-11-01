@@ -53,3 +53,5 @@ class Config:
 
 
         self.decoder_from_scratch = args.decoder_from_scratch if "decoder_from_scratch" in args.__dict__ else 0
+
+        self.uni_labels = []

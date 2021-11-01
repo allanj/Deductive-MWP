@@ -16,9 +16,7 @@ from collections import Counter
 """
 not finished yet
 """
-uni_labels = [
-    '+','-', '-_rev', '*', '/', '/_rev'
-]
+
 
 UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
 UniFeature.__new__.__defaults__ = (None,) * 7
@@ -27,6 +25,7 @@ class UniversalDataset(Dataset):
 
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
+                 uni_labels:List[str],
                  number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
@@ -42,6 +41,7 @@ class UniversalDataset(Dataset):
         self.add_new_token = add_new_token
         self.add_replacement = add_replacement
         self.data_max_height = data_max_height
+        self.uni_labels = uni_labels
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -144,6 +144,7 @@ class UniversalDataset(Dataset):
         num_mawps_constant_removed = 0
         not_equal_num = 0
         answer_calculate_exception = 0
+        num_var_is_zero = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if obj['id'] != '155463083': #61780956 155463083 157050803
             #     continue DEBUGGING code
@@ -196,8 +197,12 @@ class UniversalDataset(Dataset):
                     if (token == "<" or token=='Ġ<') and tokens[k:k+quant_num] == quants:
                         var_starts.append(k)
                         var_ends.append(k+quant_num-1)
+            assert len(input_ids) < 512
             num_variable = len(var_starts)
             assert len(var_starts) == len(obj["num_list"])
+            if len(obj["num_list"]) == 0:
+                num_var_is_zero += 1
+                continue
             var_mask = [1] * num_variable
             if len(obj["equation_layer"])  == 0:
                 num_empty_equation += 1
@@ -243,9 +248,9 @@ class UniversalDataset(Dataset):
                 continue
             try:
                 if self.use_incremental_labeling:
-                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=uni_labels, constant_values=self.constant_values)
+                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
                 else:
-                    res = compute_value(labels, obj["num_list"], self.constant_num, uni_labels=uni_labels, constant_values=self.constant_values)
+                    res = compute_value(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
             except:
                 # print("answer calculate exception")
                 answer_calculate_exception += 1
@@ -267,6 +272,9 @@ class UniversalDataset(Dataset):
             num_step_count[len(labels)] += 1
 
             max_num_steps = max(max_num_steps, len(labels))
+            ## check label all valid
+            for label in labels:
+                assert all([label[i] >= 0 for i in range(4)])
             self._features.append(
                 UniFeature(input_ids=input_ids,
                            attention_mask=attention_mask,
@@ -285,6 +293,7 @@ class UniversalDataset(Dataset):
         print(f"num mawps constant removed: {num_mawps_constant_removed}")
         print(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
         print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
+        print(f"number of instances with no detected variables: {num_var_is_zero}")
         print(num_step_count)
         ### out_file = "../../data/large_math/mwp_processed_filtered.json"
         ### write_data(file=out_file, data= data)
@@ -313,16 +322,16 @@ class UniversalDataset(Dataset):
             except:
                 return "index error"
             if left_var_idx < right_var_idx:
-                op_idx = uni_labels.index(op)
+                op_idx = self.uni_labels.index(op)
                 label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 # left > right
                 if op in ["+", "*"]:
-                    op_idx = uni_labels.index(op)
+                    op_idx = self.uni_labels.index(op)
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:
                     assert not op.endswith("_rev")
-                    op_idx = uni_labels.index(op + "_rev")
+                    op_idx = self.uni_labels.index(op + "_rev")
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
@@ -361,16 +370,16 @@ class UniversalDataset(Dataset):
             if left_var_idx <= right_var_idx:
                 if left_var_idx == right_var_idx and op.endswith("_rev"):
                     op = op[:-4]
-                op_idx = uni_labels.index(op)
+                op_idx = self.uni_labels.index(op)
                 label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 # left > right
                 if (op in ["+", "*"]):
-                    op_idx = uni_labels.index(op)
+                    op_idx = self.uni_labels.index(op)
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:
                     # assert not op.endswith("_rev")
-                    op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else  uni_labels.index(op[:-4])
+                    op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else  self.uni_labels.index(op[:-4])
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
@@ -425,44 +434,44 @@ class UniversalDataset(Dataset):
             if left_var.startswith("m_") or right_var.startswith("m_"):
                 if left_var.startswith("m_") and (not right_var.startswith("m_")):
                     assert left_var_idx < right_var_idx
-                    op_idx = uni_labels.index(op)
+                    op_idx = self.uni_labels.index(op)
                     label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                 elif not left_var.startswith("m_") and right_var.startswith("m_"):
                     assert left_var_idx > right_var_idx
-                    op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                    op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else self.uni_labels.index(op[:-4])
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:
                     ## both starts with m
                     if left_var_idx >= right_var_idx: ##left larger means left m_idx smaller
                         op = op[:-4] if left_var_idx == right_var_idx and op.endswith("_rev") else op
-                        op_idx = uni_labels.index(op)
+                        op_idx = self.uni_labels.index(op)
                         if left_var_idx > right_var_idx and (op not in ["+", "*"]):
-                            op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                            op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else self.uni_labels.index(op[:-4])
                         label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                     else:
                         #left < right
                         if (op in ["+", "*"]):
-                            op_idx = uni_labels.index(op)
+                            op_idx = self.uni_labels.index(op)
                             label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                         else:
                             # assert not op.endswith("_rev")
                             assert  "+" not in op and "*" not in op
-                            op_idx = uni_labels.index(op)
+                            op_idx = self.uni_labels.index(op)
                             label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
             else:
                 if left_var_idx <= right_var_idx:
                     if left_var_idx == right_var_idx and op.endswith("_rev"):
                         op = op[:-4]
-                    op_idx = uni_labels.index(op)
+                    op_idx = self.uni_labels.index(op)
                     label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                 else:
                     # left > right
                     if (op in ["+", "*"]):
-                        op_idx = uni_labels.index(op)
+                        op_idx = self.uni_labels.index(op)
                         label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                     else:
                         # assert not op.endswith("_rev")
-                        op_idx = uni_labels.index(op + "_rev") if not op.endswith("_rev") else uni_labels.index(op[:-4])
+                        op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else self.uni_labels.index(op[:-4])
                         label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
@@ -504,17 +513,20 @@ class UniversalDataset(Dataset):
 
 
 def main_for_mawps():
+    uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+    ]
     constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
     tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
-    UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
@@ -522,13 +534,16 @@ def main_for_math23k():
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
     constant2id = {"1": 0, "PI": 1}
     constant_values = [1.0, 3.14]
-    UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer,
+    uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+    ]
+    UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
@@ -537,7 +552,10 @@ def main_for_ours():
     constants = ['5.0', '10.0', '2.0', '8.0', '30.0', '1.0', '6.0', '7.0', '12.0', '4.0', '31.0', '3.14', '3.0']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-    UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer,
+    uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+    ]
+    UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
     # UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer,
@@ -563,15 +581,18 @@ def main_for_mathqa():
 
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-
+    uni_labels = [
+            '+', '-', '-_rev', '*', '/', '/_rev'
+        ]
+    # uni_labels = uni_labels + ['^', '^_rev']
     tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
-    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer,
+    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False)
 
@@ -583,6 +604,9 @@ if __name__ == '__main__':
     # main_for_ours()
 
     ## for math qa
-    uni_labels = uni_labels + ['^', '^_rev']
+    # uni_labels = [
+    #     '+', '-', '-_rev', '*', '/', '/_rev'
+    # ]
+    # uni_labels = uni_labels + ['^', '^_rev']
     main_for_mathqa()
 

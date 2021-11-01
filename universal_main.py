@@ -1,4 +1,4 @@
-from src.data.universal_dataset import UniversalDataset, uni_labels
+from src.data.universal_dataset import UniversalDataset
 from src.config import Config
 from torch.utils.data import DataLoader
 from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast
@@ -155,7 +155,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
         print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
         if valid_dataloader is not None:
-            performance = evaluate(valid_dataloader, model, dev, fp16=bool(config.fp16), constant_values=constant_values,
+            performance = evaluate(valid_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
                                    add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0))
             if performance > best_performance:
                 print(f"[Model Info] Saving the best model... with performance {performance}..")
@@ -243,7 +243,7 @@ def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num:
             batched_prediction[b_idx].append(curr_label)
     return batched_prediction
 
-def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List,
+def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, uni_labels:List,
              add_replacement: bool = False, consider_multiple_m0: bool = False, res_file: str= None, err_file:str = None,
              num_beams:int = 1) -> float:
     model.eval()
@@ -351,7 +351,7 @@ def main():
 
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" else f"{conf.bert_folder}/{conf.bert_model_name}"
     ## update to latest type classification
-    num_labels = 6
+
     if "hfl" in bert_model_name:
         tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
     else:
@@ -361,6 +361,11 @@ def main():
         print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
         tokenizer.add_tokens('<NUM>', special_tokens=True)
 
+    uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+    ]
+    num_labels = 6
+    conf.uni_labels = uni_labels
     if conf.use_constant:
         if "23k" in conf.train_file:
             constant2id = {"1": 0, "PI": 1}
@@ -378,6 +383,9 @@ def main():
             constant_number = len(constant_values)
         elif "MathQA" in conf.train_file:
             constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416', '3.6', '0.25', '5.0', '6.0', '360.0', '52.0', '180.0']
+            conf.uni_labels = conf.uni_labels + ['^', '^_rev']
+            num_labels = len(conf.uni_labels)
+            # constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416']
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)
@@ -395,12 +403,12 @@ def main():
     # Read dataset
     if opt.mode == "train":
         print("[Data Info] Reading training data", flush=True)
-        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, number=conf.train_num, filtered_steps=opt.filtered_steps,
+        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.train_num, filtered_steps=opt.filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
                                    data_max_height=opt.train_max_height)
         print("[Data Info] Reading validation data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
                                         data_max_height=conf.height)
@@ -431,7 +439,7 @@ def main():
                                                constant_num = constant_number,
                                             add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                         use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
@@ -439,7 +447,7 @@ def main():
         os.makedirs("results", exist_ok=True)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement),
+        evaluate(valid_dataloader, model, conf.device, uni_labels=conf.uni_labels, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                  consider_multiple_m0=bool(conf.consider_multiple_m0), res_file=res_file, err_file=err_file)
 
 if __name__ == "__main__":
