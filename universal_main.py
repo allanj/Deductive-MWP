@@ -363,7 +363,7 @@ def main():
     set_seed(opt)
     conf = Config(opt)
 
-    bert_model_name = conf.bert_model_name if conf.bert_folder == "" else f"{conf.bert_folder}/{conf.bert_model_name}"
+    bert_model_name = conf.bert_model_name if conf.bert_folder == "" or conf.bert_folder=="none" else f"{conf.bert_folder}/{conf.bert_model_name}"
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
@@ -415,9 +415,7 @@ def main():
             constant_values = None
             constant_number = 0
     else:
-        constant2id = None
-        constant_values = None
-        constant_number = 0
+        raise NotImplementedError
     print(f"[Data Info] constant info: {constant2id}")
 
 

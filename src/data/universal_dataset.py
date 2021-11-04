@@ -1,3 +1,5 @@
+import traceback
+
 import torch
 from torch.utils.data import Dataset
 from typing import List, Union
@@ -52,86 +54,8 @@ class UniversalDataset(Dataset):
         self.data_max_height = data_max_height
         self.uni_labels = uni_labels
         self.quant_list = class_name_2_quant_list[pretrained_model_name]
-        if "complex" in file:
-            self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
-        else:
-            self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
+        self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
 
-    def read_complex_file(self, file: Union[str, None],
-                 tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, add_replacement: bool = False,
-                 filtered_steps: List = None) -> None:
-        data = read_data(file=file)
-        if number > 0:
-            data = data[:number]
-        # ## tokenization
-        self._features = []
-        num_has_same_var_m0 = 0
-        max_num_steps = 0
-        self.insts = []
-        filtered_steps = [int(f) for f in filtered_steps] if filtered_steps else None
-        number_instances_filtered = 0
-        for obj in tqdm(data, desc='Tokenization', total=len(data)):
-            # if not (obj['legal'] and obj['num_steps'] <= 2):
-            #     continue
-            if not obj['legal']:
-                continue
-            if filtered_steps and obj['num_steps'] in filtered_steps:
-                ## in experiments, we can choose to filter some questions with specific steps
-                number_instances_filtered += 1
-                continue
-            ## equation preprocessing
-            # mapped_equation = obj["mapped_equation"]
-            # for k in range(ord('a'), ord('a') + 26):
-            #     mapped_equation = mapped_equation.replace(f"( temp_{chr(k)} )", f"temp_{chr(k)}")
-            # pattern = r"\( ?\( ?temp_\w [\+\-\*\/] temp_\w ?\) ?\)"
-            # if len(re.findall(pattern, mapped_equation)) > 0:
-            #     mapped_equation = mapped_equation.replace("( ( ", "( ").replace(") ) ", ") ")
-            ### end equation preprocess
-            mapped_text = obj["mapped_text"]
-            for k in range(ord('a'), ord('a') + 26):
-                mapped_text = mapped_text.replace(f"@ {chr(k)}", " <quant> ")
-            mapped_text = mapped_text.split()
-            input_text = ""
-            for idx, word in enumerate(mapped_text):
-                if word.strip() == "<quant>":
-                    input_text += " <quant> "
-                elif word == "," or word == "，":
-                    input_text += word + " "
-                else:
-                    input_text += word
-            res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
-            input_ids = res["input_ids"]
-            attention_mask = res["attention_mask"]
-            tokens = tokenizer.convert_ids_to_tokens(input_ids)
-            var_starts = []
-            var_ends = []
-            for k, token in enumerate(tokens):
-                if token == "<" and tokens[k:k+5] == ['<', 'q', '##uan', '##t', '>']:
-                    var_starts.append(k)
-                    var_ends.append(k+4)
-            num_variable = len(var_starts)
-            var_mask = [1] * num_variable
-            labels = self.get_label_ids(obj["equation_layer"], add_replacement=add_replacement)
-            if not labels:
-                num_has_same_var_m0 += 1
-                continue
-            label_height_mask = [1] * len(labels)
-            max_num_steps = max(max_num_steps, len(labels))
-            self._features.append(
-                UniFeature(input_ids=input_ids,
-                           attention_mask=attention_mask,
-                           token_type_ids = [0] * len(input_ids),
-                           variable_indexs_start=var_starts,
-                           variable_indexs_end=var_ends,
-                           num_variables=num_variable,
-                           variable_index_mask=var_mask,
-                           labels = labels,
-                           label_height_mask=label_height_mask)
-            )
-            self.insts.append(obj)
-        print(f"number of instances that have same variable in m0: {num_has_same_var_m0}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}")
 
     def read_math23k_file(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
@@ -160,15 +84,12 @@ class UniversalDataset(Dataset):
         var_num_all =0
         var_num_count = Counter()
         sent_len_all = 0
+        filter_type_count = Counter()
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
-            # if obj['id'] != '155463083': #61780956 155463083 157050803
-            #     continue DEBUGGING code
-            if obj['type_str'] != "legal":
+            if obj['type_str'] != "legal" and obj['type_str'] != "variable more than 7":
+                filter_type_count[obj["type_str"]] += 1
                 number_instances_filtered += 1
                 continue
-            # if "have_constant" in obj and obj["have_constant"]:
-            #     num_mawps_constant_removed += 1
-            #     continue
             mapped_text = obj["text"]
             sent_len = len(mapped_text.split())
             for k in range(ord('a'), ord('a') + 26):
@@ -282,10 +203,14 @@ class UniversalDataset(Dataset):
                 else:
                     assert math.fabs(diff) < 1
             except:
+                # traceback.print_exc()
                 # print("not equal", flush=True)
                 not_equal_num += 1
                 obj['type_str'] = "illegal"
-                continue
+                if "test" in file or "valid" in file:
+                    continue
+                else:
+                    pass
             label_height_mask = [1] * len(labels)
             num_step_count[len(labels)] += 1
 
@@ -312,7 +237,7 @@ class UniversalDataset(Dataset):
             self.insts.append(obj)
         print(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
-        print(f"max intermeidate num for parallel: {max_intermediate_num_for_parallel}")
+        print(f"filtered type counter: {filter_type_count}")
         print(f"num mawps constant removed: {num_mawps_constant_removed}")
         print(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
         print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
@@ -560,22 +485,26 @@ def main_for_mawps():
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 def main_for_math23k():
-    pretrained_language_moel = 'hfl/chinese-roberta-wwm-ext'
-    tokenizer = BertTokenizer.from_pretrained(pretrained_language_moel)
+    pretrained_language_model = 'hfl/chinese-roberta-wwm-ext'
+    tokenizer = BertTokenizer.from_pretrained(pretrained_language_model)
     constant2id = {"1": 0, "PI": 1}
     constant_values = [1.0, 3.14]
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
+    data_max_height = 15
     UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_model,
+                     data_max_height = data_max_height)
     UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_model,
+                     data_max_height=data_max_height)
     UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_model,
+                     data_max_height=data_max_height)
 
 def main_for_ours():
     pretrained_language_moel = 'hfl/chinese-roberta-wwm-ext'
@@ -644,7 +573,7 @@ if __name__ == '__main__':
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
     # main_for_mawps()
-    main_for_ours()
+    # main_for_ours()
     # main_for_mathqa()
     main_for_math23k()
 
