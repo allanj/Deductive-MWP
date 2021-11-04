@@ -294,10 +294,11 @@ class UniversalModel_XLMRoberta(RobertaPreTrainedModel):
                     else:
                         temp_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states],
                                                 dim=1)  ## batch_size x (num_var + i) x hidden_size
-                        intermediate_var_mask = torch.ones((batch_size, i), device=variable_indexs_start.device)
-                        temp_mask = torch.cat([intermediate_var_mask, variable_index_mask], dim=1)
+                        temp_mask = torch.eye(max_num_variable + i, device=variable_indexs_start.device)
+                        temp_mask[:, 0] = 1
+                        temp_mask[0, :] = 1
                         updated_all_states, _ = self.variable_gru(temp_states, temp_states, temp_states,
-                                                                         key_padding_mask=temp_mask)
+                                                                  attn_mask=1 - temp_mask)
                         var_hidden_states = updated_all_states[:, 1:, :]
 
                     num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)

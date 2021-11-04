@@ -155,6 +155,11 @@ class UniversalDataset(Dataset):
         not_equal_num = 0
         answer_calculate_exception = 0
         num_var_is_zero = 0
+        equation_layer_num = 0
+        equation_layer_num_count = Counter()
+        var_num_all =0
+        var_num_count = Counter()
+        sent_len_all = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             # if obj['id'] != '155463083': #61780956 155463083 157050803
             #     continue DEBUGGING code
@@ -165,18 +170,24 @@ class UniversalDataset(Dataset):
             #     num_mawps_constant_removed += 1
             #     continue
             mapped_text = obj["text"]
+            sent_len = len(mapped_text.split())
             for k in range(ord('a'), ord('a') + 26):
                 mapped_text = mapped_text.replace(f"temp_{chr(k)}", " <quant> ")
-            mapped_text = mapped_text.split()
-            input_text = ""
-            for idx, word in enumerate(mapped_text):
-                if word.strip() == "<quant>":
-                    input_text += " <quant> "
-                elif word == "," or word == "，":
-                    input_text += word + " "
-                else:
-                    input_text += word
-            res = tokenizer.encode_plus(input_text, add_special_tokens=True, return_attention_mask=True)
+            if "math23k" in file or "large_math" in file:
+                mapped_text = mapped_text.split()
+                input_text = ""
+                for idx, word in enumerate(mapped_text):
+                    if word.strip() == "<quant>":
+                        input_text += " <quant> "
+                    elif word == "," or word == "，":
+                        input_text += word + " "
+                    else:
+                        input_text += word
+            elif "MathQA" in file or "mawps" in file:
+                input_text = ' '.join(mapped_text.split())
+            else:
+                raise NotImplementedError
+            res = tokenizer.encode_plus(" " + input_text, add_special_tokens=True, return_attention_mask=True)
             input_ids = res["input_ids"]
             attention_mask = res["attention_mask"]
             tokens = tokenizer.convert_ids_to_tokens(input_ids)
@@ -282,6 +293,11 @@ class UniversalDataset(Dataset):
             ## check label all valid
             for label in labels:
                 assert all([label[i] >= 0 for i in range(4)])
+            equation_layer_num += len(obj["equation_layer"])
+            equation_layer_num_count[len(obj["equation_layer"])] += 1
+            sent_len_all += sent_len
+            var_num_all += len(obj["num_list"])
+            var_num_count[len(obj["num_list"])] += 1
             self._features.append(
                 UniFeature(input_ids=input_ids,
                            attention_mask=attention_mask,
@@ -295,13 +311,18 @@ class UniversalDataset(Dataset):
             )
             self.insts.append(obj)
         print(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, numbet_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
+              f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
         print(f"max intermeidate num for parallel: {max_intermediate_num_for_parallel}")
         print(f"num mawps constant removed: {num_mawps_constant_removed}")
         print(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
         print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
         print(f"number of instances with no detected variables: {num_var_is_zero}")
         print(num_step_count)
+        avg_eq_num = equation_layer_num * 1.0/ len(self._features)
+        print(f"average operation number: {avg_eq_num}, total: {equation_layer_num}, counter: {equation_layer_num_count}")
+        avg_sent_len = sent_len_all * 1.0 / len(self._features)
+        print(f"average sentence length: {avg_sent_len}, total: {sent_len_all}")
+        print(f"variable number avg: {var_num_all * 1.0 / len(self._features)}, total: {var_num_all}, counter:{var_num_count}")
         ### out_file = "../../data/large_math/mwp_processed_filtered.json"
         ### write_data(file=out_file, data= data)
 
@@ -526,8 +547,8 @@ def main_for_mawps():
     constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-    pretrained_language_moel = 'xlm-roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
-    tokenizer = XLMRobertaTokenizerFast.from_pretrained(pretrained_language_moel)
+    pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
+    tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
     UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
@@ -565,18 +586,18 @@ def main_for_ours():
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
-    UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    # UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 
 def main_for_mathqa():
@@ -597,31 +618,40 @@ def main_for_mathqa():
     uni_labels = uni_labels + ['^', '^_rev']
     pretrained_language_moel = 'roberta-base'
     tokenizer = RobertaTokenizerFast.from_pretrained(pretrained_language_moel)
-    UniversalDataset(file="../../data/MathQA/debug.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    # UniversalDataset(file="../../data/MathQA/debug.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    # UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 if __name__ == '__main__':
     from transformers import BertTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
-    add_replacement = False
+    add_replacement = True
     use_incremental_labeling = True
+    class_name_2_tokenizer = {
+        "bert-base-cased": BertTokenizerFast,
+        "roberta-base": RobertaTokenizerFast,
+        "bert-base-multilingual-cased": BertTokenizerFast,
+        "xlm-roberta-base": XLMRobertaTokenizerFast,
+        'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
+        'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
+    }
     # main_for_mawps()
-    # main_for_ours()
+    main_for_ours()
     # main_for_mathqa()
+    main_for_math23k()
 
     ## for math qa
     # uni_labels = [
     #     '+', '-', '-_rev', '*', '/', '/_rev'
     # ]
     # uni_labels = uni_labels + ['^', '^_rev']
-    main_for_mawps()
+    # main_for_math23k()
 
