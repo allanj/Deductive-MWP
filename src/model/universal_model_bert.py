@@ -1,8 +1,7 @@
-from transformers.models.roberta.modeling_roberta import RobertaModel, RobertaPreTrainedModel, RobertaConfig
+from transformers.models.bert.modeling_bert import BertModel, BertPreTrainedModel, BertConfig
 import torch.nn as nn
 import torch
 import torch.utils.checkpoint
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_outputs import (
     ModelOutput,
 )
@@ -40,9 +39,9 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
     return batched_comb_mask[:,:, 0] * batched_comb_mask[:,:, 1]
 
 
-class UniversalModel_Roberta(RobertaPreTrainedModel):
+class UniversalModel_Bert(BertPreTrainedModel):
 
-    def __init__(self, config: RobertaConfig,
+    def __init__(self, config: BertConfig,
                  diff_param_for_height:bool=True,
                  height: int = 4,
                  constant_num: int = 0,
@@ -63,7 +62,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         assert self.num_labels == 6 or self.num_labels == 8
         self.config = config
 
-        self.roberta = RobertaModel(config)
+        self.bert = BertModel(config)
         self.add_replacement = bool(add_replacement)
         self.consider_multiple_m0 = bool(consider_multiple_m0)
 
@@ -148,7 +147,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                     If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
                 """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        outputs = self.roberta( # batch_size, sent_len, hidden_size,
+        outputs = self.bert( # batch_size, sent_len, hidden_size,
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -407,147 +406,3 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
 
-
-
-
-def test_case_batch_two():
-    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=2)
-    from transformers import BertTokenizer
-    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
-    uni_labels = [
-        '+', '-', '-_rev', '*', '/', '/_rev'
-    ]
-    text1 = "一本笔记本 <quant> 元钱, 王小明共带了 <quant> 元, 他一共能买多少本这样的笔记本?"  ## x= temp_b / temp_a
-    text2 = "爸爸买来 <quant> 个桃子, 吃了 <quant> 个, 妈妈又买来 <quant> 个桃子, 现在有多少个桃子?"  ##x= temp_a - temp_b + temp_c"
-    ## tokens = ['一', '本', '笔', '记', '本', '<', 'q', '##uan', '##t', '>', '元', '钱', ',', '王', '小', '明', '共', '带', '了', '<', 'q', '##uan', '##t', '>', '元', ',', '他', '一', '共', '能', '买', '多', '少', '本', '这', '样', '的', '笔', '记', '本', '?']
-    res = tokenizer.batch_encode_plus([text1, text2], return_tensors='pt', padding=True)
-    input_ids = res["input_ids"]
-    attention_mask = res["attention_mask"]
-    token_type_ids = res["token_type_ids"]
-    variable_indexs_start = torch.tensor([[6, 20, 0], [5, 16, 28]])
-    variable_indexs_end = torch.tensor([[10, 24, 0], [9, 20, 32]])
-    num_variables = torch.tensor([2, 3])
-    variable_index_mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
-
-    ## batch_size = 2, height=2, 3
-    labels = torch.tensor([
-        [
-            [
-                0, 1, uni_labels.index('/_rev'), 0
-            ],
-            [
-                -1, 2, 1, 1 ## 3 means, for this one, we directly forward
-            ],
-            [
-                -1, 0, 0, 0 ## 3 means, for this one, we directly forward
-            ]
-        ],
-        [
-            [
-                0, 1, uni_labels.index('-'), 0
-            ],
-            [
-                -1, 2, uni_labels.index('+'), 0
-            ],
-            [
-                -1, 3, 0, 1 ## 3 means, for this one, we directly forward
-            ]
-        ]
-    ])
-    label_height_mask = torch.tensor(
-        [
-            [
-                1, 1, 0
-            ],
-            [
-                1, 1, 1
-            ]
-        ]
-    )
-    print(label_height_mask.size())
-    print(labels.size())
-    print(model(input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                variable_indexs_start=variable_indexs_start,
-                variable_indexs_end=variable_indexs_end,
-                num_variables=num_variables,
-                variable_index_mask=variable_index_mask,
-                label_height_mask = label_height_mask,
-                labels=labels))
-
-def test_case_batch_two_mutiple_m0():
-    import random
-    import numpy as np
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
-    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=0, add_replacement=True, height=4, consider_multiple_m0=True)
-    model.eval()
-    from transformers import BertTokenizer
-    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
-    uni_labels = [
-        '+', '-', '-_rev', '*', '/', '/_rev'
-    ]
-    text1 = "一本笔记本 <quant> 元钱, 王小明共带了 <quant> 元, 他一共能买多少本这样的笔记本?"  ## x= temp_b / temp_a
-    text2 = "爸爸买来 <quant> 个桃子, 吃了 <quant> 个, 妈妈又买来 <quant> 个桃子, 现在有多少个桃子?"  ##x= temp_a - temp_b + temp_c"
-    ## tokens = ['一', '本', '笔', '记', '本', '<', 'q', '##uan', '##t', '>', '元', '钱', ',', '王', '小', '明', '共', '带', '了', '<', 'q', '##uan', '##t', '>', '元', ',', '他', '一', '共', '能', '买', '多', '少', '本', '这', '样', '的', '笔', '记', '本', '?']
-    res = tokenizer.batch_encode_plus([text1, text2], return_tensors='pt', padding=True)
-    input_ids = res["input_ids"]
-    attention_mask = res["attention_mask"]
-    token_type_ids = res["token_type_ids"]
-    variable_indexs_start = torch.tensor([[6, 20, 0], [5, 16, 28]])
-    variable_indexs_end = torch.tensor([[10, 24, 0], [9, 20, 32]])
-    num_variables = torch.tensor([2, 3])
-    variable_index_mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
-
-    ## batch_size = 2, height=2, 3
-    labels = torch.tensor([
-        [
-            [
-                0, 1, uni_labels.index('/_rev'), 1
-            ],
-            [
-                0, 0, 0, 0 ## 3 means, for this one, we directly forward
-            ],
-            [
-                0, 0, 0, 0 ## 3 means, for this one, we directly forward
-            ]
-        ],
-        [
-            [
-                0, 1, uni_labels.index('-'), 0
-            ],
-            [
-                0, 3, uni_labels.index('+'), 1
-            ],
-            [
-                0, 0, 0, 0 ## 3 means, for this one, we directly forward
-            ]
-        ]
-    ])
-    label_height_mask = torch.tensor(
-        [
-            [
-                1, 0, 0
-            ],
-            [
-                1, 1, 0
-            ]
-        ]
-    )
-    print(label_height_mask.size())
-    print(labels.size())
-    print(model(input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                variable_indexs_start=variable_indexs_start,
-                variable_indexs_end=variable_indexs_end,
-                num_variables=num_variables,
-                variable_index_mask=variable_index_mask,
-                label_height_mask = label_height_mask,
-                labels=labels))
-
-
-if __name__ == '__main__':
-    test_case_batch_two_mutiple_m0()

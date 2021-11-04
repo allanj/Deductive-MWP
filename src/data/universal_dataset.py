@@ -17,6 +17,14 @@ from collections import Counter
 not finished yet
 """
 
+class_name_2_quant_list = {
+    "bert-base-cased": ['<', 'q', '##uant', '>'],
+    "roberta-base": ['Ġ<', 'quant', '>'],
+    "bert-base-multilingual-cased": ['<', 'quant', '>'],
+    "xlm-roberta-base": ['▁<', 'quant', '>'],
+    'hfl/chinese-bert-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
+    'hfl/chinese-roberta-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
+}
 
 UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
 UniFeature.__new__.__defaults__ = (None,) * 7
@@ -26,6 +34,7 @@ class UniversalDataset(Dataset):
     def __init__(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
                  uni_labels:List[str],
+                 pretrained_model_name:str,
                  number: int = -1, add_replacement: bool = False,
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
@@ -42,6 +51,7 @@ class UniversalDataset(Dataset):
         self.add_replacement = add_replacement
         self.data_max_height = data_max_height
         self.uni_labels = uni_labels
+        self.quant_list = class_name_2_quant_list[pretrained_model_name]
         if "complex" in file:
             self.read_complex_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -172,17 +182,14 @@ class UniversalDataset(Dataset):
             tokens = tokenizer.convert_ids_to_tokens(input_ids)
             var_starts = []
             var_ends = []
-            is_roberta_tokenizer = isinstance(tokenizer, RobertaTokenizerFast) or isinstance(tokenizer, RobertaTokenizer)
-            is_bert_tokenizer = isinstance(tokenizer, BertTokenizer) or isinstance(tokenizer, BertTokenizerFast)
-            assert is_roberta_tokenizer or is_bert_tokenizer
-            quant_num = 5 if not is_roberta_tokenizer else 3
-            quants = ['<', 'q', '##uan', '##t', '>'] if not is_roberta_tokenizer else ['Ġ<', 'quant', '>']
+            quant_num = len(self.quant_list)
+            # quants = ['<', 'q', '##uan', '##t', '>'] if not is_roberta_tokenizer else ['Ġ<', 'quant', '>']
             if self.add_new_token:
                 new_tokens = []
                 k = 0
                 while k < len(tokens):
                     curr_tok = tokens[k]
-                    if (curr_tok == "<" or curr_tok=='Ġ<') and tokens[k:k+quant_num] == quants:
+                    if (curr_tok == self.quant_list[0]) and tokens[k:k+quant_num] == self.quant_list:
                         new_tokens.append('<NUM>')
                         var_starts.append(len(new_tokens))
                         var_ends.append(len(new_tokens))
@@ -194,7 +201,7 @@ class UniversalDataset(Dataset):
                 attention_mask = [1] * len(input_ids)
             else:
                 for k, token in enumerate(tokens):
-                    if (token == "<" or token=='Ġ<') and tokens[k:k+quant_num] == quants:
+                    if (token == self.quant_list[0]) and tokens[k:k+quant_num] == self.quant_list:
                         var_starts.append(k)
                         var_ends.append(k+quant_num-1)
             assert len(input_ids) < 512
@@ -519,19 +526,21 @@ def main_for_mawps():
     constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-    tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
+    pretrained_language_moel = 'xlm-roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
+    tokenizer = XLMRobertaTokenizerFast.from_pretrained(pretrained_language_moel)
     UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 def main_for_math23k():
-    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
+    pretrained_language_moel = 'hfl/chinese-roberta-wwm-ext'
+    tokenizer = BertTokenizer.from_pretrained(pretrained_language_moel)
     constant2id = {"1": 0, "PI": 1}
     constant_values = [1.0, 3.14]
     uni_labels = [
@@ -539,16 +548,17 @@ def main_for_math23k():
     ]
     UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 def main_for_ours():
-    tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')
+    pretrained_language_moel = 'hfl/chinese-roberta-wwm-ext'
+    tokenizer = BertTokenizer.from_pretrained(pretrained_language_moel)
     constants = ['5.0', '10.0', '2.0', '8.0', '30.0', '1.0', '6.0', '7.0', '12.0', '4.0', '31.0', '3.14', '3.0']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
@@ -557,16 +567,16 @@ def main_for_ours():
     ]
     UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     # UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     # UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     # UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 
 def main_for_mathqa():
@@ -584,29 +594,34 @@ def main_for_mathqa():
     uni_labels = [
             '+', '-', '-_rev', '*', '/', '/_rev'
         ]
-    # uni_labels = uni_labels + ['^', '^_rev']
-    tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base')
-    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    uni_labels = uni_labels + ['^', '^_rev']
+    pretrained_language_moel = 'roberta-base'
+    tokenizer = RobertaTokenizerFast.from_pretrained(pretrained_language_moel)
+    UniversalDataset(file="../../data/MathQA/debug.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
-    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False)
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    # UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    # UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    # UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 if __name__ == '__main__':
-    from transformers import BertTokenizer, RobertaTokenizerFast
-    add_replacement = True
+    from transformers import BertTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
+    add_replacement = False
     use_incremental_labeling = True
     # main_for_mawps()
     # main_for_ours()
+    # main_for_mathqa()
 
     ## for math qa
     # uni_labels = [
     #     '+', '-', '-_rev', '*', '/', '/_rev'
     # ]
     # uni_labels = uni_labels + ['^', '^_rev']
-    main_for_mathqa()
+    main_for_mawps()
 

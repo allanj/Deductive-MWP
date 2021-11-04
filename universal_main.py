@@ -1,7 +1,7 @@
 from src.data.universal_dataset import UniversalDataset
 from src.config import Config
 from torch.utils.data import DataLoader
-from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast
+from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
 from tqdm import tqdm
 import argparse
 from src.utils import get_optimizers, write_data
@@ -12,9 +12,20 @@ import os
 import random
 from src.model.universal_model import UniversalModel
 from src.model.universal_model_roberta import UniversalModel_Roberta
+from src.model.universal_model_bert import UniversalModel_Bert
+from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List
+
+class_name_2_model = {
+        "bert-base-cased": UniversalModel_Bert,
+        "roberta-base": UniversalModel_Roberta,
+        "bert-base-multilingual-cased": UniversalModel_Bert,
+        "xlm-roberta-base": UniversalModel_XLMRoberta,
+        'hfl/chinese-bert-wwm-ext': UniversalModel,
+        'hfl/chinese-roberta-wwm-ext': UniversalModel,
+    }
 
 def set_seed(args):
     random.seed(args.seed)
@@ -60,6 +71,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--train_max_height', type=int, default=100, help="the maximum height for training data")
     parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
+    parser.add_argument('--var_update_mode', type=str, default="gru", help="variable update mode")
+
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
     parser.add_argument('--learning_rate', type=float, default=2e-5, help="learning rate of the AdamW optimizer")
@@ -93,14 +106,15 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
 
     constant_num = len(constant_values) if constant_values else 0
-    MODEL_CLASS = UniversalModel  if "hfl" in bert_model_name else UniversalModel_Roberta
+    MODEL_CLASS = class_name_2_model[bert_model_name]
     model = MODEL_CLASS.from_pretrained(bert_model_name,
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
                                            add_replacement=bool(config.add_replacement),
-                                           consider_multiple_m0=bool(config.consider_multiple_m0)).to(dev)
+                                           consider_multiple_m0=bool(config.consider_multiple_m0),
+                                            var_update_mode=config.var_update_mode).to(dev)
     if config.add_new_token:
         model.resize_token_embeddings(len(tokenizer))
         if model.config.tie_word_embeddings:
@@ -170,7 +184,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            height=config.height,
                                            constant_num=constant_num,
                                            add_replacement=bool(config.add_replacement),
-                                           consider_multiple_m0=bool(config.consider_multiple_m0)).to(dev)
+                                           consider_multiple_m0=bool(config.consider_multiple_m0), var_update_mode=config.var_update_mode).to(dev)
     if config.fp16:
         model.half()
         model.save_pretrained(f"model_files/{config.model_folder}")
@@ -350,12 +364,19 @@ def main():
     conf = Config(opt)
 
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" else f"{conf.bert_folder}/{conf.bert_model_name}"
+    class_name_2_tokenizer = {
+        "bert-base-cased": BertTokenizerFast,
+        "roberta-base": RobertaTokenizerFast,
+        "bert-base-multilingual-cased": BertTokenizerFast,
+        "xlm-roberta-base": XLMRobertaTokenizerFast,
+        'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
+        'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
+    }
+
+    TOKENIZER_CLASS_NAME = class_name_2_tokenizer[bert_model_name]
     ## update to latest type classification
 
-    if "hfl" in bert_model_name:
-        tokenizer = BertTokenizerFast.from_pretrained(bert_model_name)
-    else:
-        tokenizer = RobertaTokenizerFast.from_pretrained(bert_model_name)
+    tokenizer = TOKENIZER_CLASS_NAME.from_pretrained(bert_model_name)
 
     if conf.add_new_token:
         print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
@@ -406,12 +427,12 @@ def main():
         dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.train_num, filtered_steps=opt.filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
-                                   data_max_height=opt.train_max_height)
+                                   data_max_height=opt.train_max_height, pretrained_model_name=bert_model_name)
         print("[Data Info] Reading validation data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
-                                        data_max_height=conf.height)
+                                        data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
 
         # Prepare data loader
@@ -428,20 +449,21 @@ def main():
                       valid_dataloader = valid_dataloader,
                       dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
                       constant_values=constant_values)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0))
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0), uni_labels=conf.uni_labels)
     else:
         print(f"Testing the model now.")
-        MODEL_CLASS = UniversalModel if "hfl" in bert_model_name else UniversalModel_Roberta
+        MODEL_CLASS = class_name_2_model[bert_model_name]
         model = MODEL_CLASS.from_pretrained(f"model_files/{conf.model_folder}",
                                                num_labels=num_labels,
                                                diff_param_for_height=conf.diff_param_for_height,
                                                height = conf.height,
                                                constant_num = constant_number,
-                                            add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0).to(conf.device)
+                                            add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0,
+                                            var_update_mode=conf.var_update_mode).to(conf.device)
         print("[Data Info] Reading test data", flush=True)
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height)
+                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height, pretrained_model_name=bert_model_name)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
         os.makedirs("results", exist_ok=True)

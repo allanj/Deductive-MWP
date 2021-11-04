@@ -49,7 +49,7 @@ class UniversalModel(BertPreTrainedModel):
                  height: int = 4,
                  constant_num: int = 0,
                  add_replacement: bool = False,
-                 consider_multiple_m0: bool = False):
+                 consider_multiple_m0: bool = False, var_update_mode: str= 'gru'):
         """
         Constructor for model function
         :param config:
@@ -101,8 +101,12 @@ class UniversalModel(BertPreTrainedModel):
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.variable_gru = None
+        self.var_update_mode =  0 if var_update_mode == 'gru' else 1
         if self.consider_multiple_m0:
-            self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+            if var_update_mode == 'gru':
+                self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
+            else:
+                self.variable_gru = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6, batch_first=True)
         self.constant_num = constant_num
         self.constant_emb = None
         if self.constant_num > 0:
@@ -284,10 +288,17 @@ class UniversalModel(BertPreTrainedModel):
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 else:
-                    ## update hidden_state (gated hidden state)
-                    init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
-                    gru_inputs = var_hidden_states.view(-1, hidden_size)
-                    var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+                    if self.var_update_mode == 0:
+                        ## update hidden_state (gated hidden state)
+                        init_h = best_mi_label_rep.unsqueeze(1).expand(batch_size, max_num_variable + i - 1, hidden_size).contiguous().view(-1, hidden_size)
+                        gru_inputs = var_hidden_states.view(-1, hidden_size)
+                        var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size, max_num_variable + i - 1, hidden_size)
+                    else:
+                        temp_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states], dim=1)  ## batch_size x (num_var + i) x hidden_size
+                        intermediate_var_mask = torch.ones((batch_size, i), device=variable_indexs_start.device)
+                        temp_mask = torch.cat([intermediate_var_mask, variable_index_mask], dim=1)
+                        updated_all_states, _ = self.variable_gru(temp_states, temp_states, temp_states, key_padding_mask=temp_mask)
+                        var_hidden_states = updated_all_states[:, 1:, :]
 
                     num_var_range = torch.arange(0, max_num_variable + i, device=variable_indexs_start.device)
                     ## 6x2 matrix
