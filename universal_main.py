@@ -38,7 +38,7 @@ def set_seed(args):
 
 def parse_arguments(parser:argparse.ArgumentParser):
     # data Hyperparameters
-    parser.add_argument('--device', type=str, default="cpu", choices=['cpu', 'cuda:0', 'cuda:1', 'cuda:2'], help="GPU/CPU devices")
+    parser.add_argument('--device', type=str, default="cpu", choices=['cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'cuda:4', 'cuda:5', 'cuda:6', 'cuda:7'], help="GPU/CPU devices")
     parser.add_argument('--batch_size', type=int, default=30)
     parser.add_argument('--shuffle_train_data', type=int, default=1, choices=[0, 1], help="shuffle the training data or not")
     parser.add_argument('--train_num', type=int, default=-1, help="The number of training data, -1 means all data")

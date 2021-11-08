@@ -30,4 +30,16 @@ for (( d=0; d<${#var_update_modes[@]}; d++  )) do
 done
 
 
+## testing
+#model_folder=math23k_chinese-roberta-wwm-ext_gru
+#bert_model_name=chinese-roberta-wwm-ext
+#bert_folder=hfl
+#var_update_mode=gru
+#python3 universal_main.py --device=cuda:0 --model_folder=${model_folder} --mode=test --height=10 --train_max_height=20 --num_epochs=1000 --consider_multiple_m0=${consider_multiple_m0} \
+#                          --train_file=data/math23k/train23k_processed_nodup.json --add_replacement=${add_replacement} --train_num=-1 --dev_num=-1 \
+#                          --dev_file=data/math23k/test23k_processed_nodup.json --use_constant=${use_constant} --add_new_token=${add_new_token} \
+#                          --bert_folder=${bert_folder} --bert_model_name=${bert_model_name} --var_update_mode=${var_update_mode} --parallel=0 \
+#                          --diff_param_for_height=${diff_param} --fp16=1 --filtered_steps ${filtered_steps} --learning_rate=2e-5 > logs/${model_folder}_eval.log 2>&1 &
+
+
 

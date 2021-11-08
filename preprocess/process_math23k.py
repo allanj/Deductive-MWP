@@ -66,6 +66,7 @@ def get_labels(target_norm_post_template: List, target_template: List, remove_du
     labels = []
     both_m = False
     eq_2_m = {}
+    got_duplicate = False
     while pointer != len(target_norm_post_template):
         stack.append(target_norm_post_template[pointer])
         if stack[-1] in {'+', '-', '*', '/', '^'}:
@@ -75,6 +76,7 @@ def get_labels(target_norm_post_template: List, target_template: List, remove_du
                 if remove_duplicate:
                     checker = check_in_labels([stack[-3], stack[-2], stack[-1]], labels)
                     if checker:
+                        got_duplicate = True
                         m_string = eq_2_m[' '.join(checker)]
                     else:
                         labels.append([stack[-3], stack[-2], stack[-1]])
@@ -129,7 +131,7 @@ def get_labels(target_norm_post_template: List, target_template: List, remove_du
             left = chr(ord(left) + gap) if len(left) == 1 and ord(left) >= ord('a') and ord(left) <= ord('z') else left
             right = chr(ord(right) + gap) if len(right) == 1 and ord(right) >= ord('a') and ord(right) <= ord('z') else right
             labels[i] = [left, right, op]
-    return labels, both_m, gap
+    return labels, both_m, gap, got_duplicate
 
 def check_intermediate_m_in_order(labels: List[List[str]]):
     current_m_idx = 0
@@ -146,7 +148,7 @@ def check_intermediate_m_in_order(labels: List[List[str]]):
 def process_obj(obj: Dict, remove_duplicate: bool = False):
     target_template = [val.strip() for val in obj["target_template"]]
 
-    labels, have_both_m, gap = get_labels(obj["target_norm_post_template"], obj["target_template"], remove_duplicate)
+    labels, have_both_m, gap, got_duplicate = get_labels(obj["target_norm_post_template"], obj["target_template"], remove_duplicate)
     type_str = "legal"
 
     # if count_variable(target_template) > 7: ## only 2 in test
@@ -165,7 +167,7 @@ def process_obj(obj: Dict, remove_duplicate: bool = False):
 
     if have_square(target_template): ## only 1 in test
         type_str = "have square"
-        return type_str, labels, gap
+        return type_str, labels, gap, False
 
     # if have_both_m:
     #     type_str = "have both m0, m1"
@@ -190,7 +192,7 @@ def process_obj(obj: Dict, remove_duplicate: bool = False):
 
 
 
-    return type_str, labels, gap
+    return type_str, labels, gap, got_duplicate
 
 def main():
     remove_duplicate = True
@@ -204,8 +206,9 @@ def main():
         data = read_data(in_file)
         count = Counter()
         inst_num_with_gap = 0
+        duplicate_num = 0
         for obj in tqdm(data, desc="processing data", total=len(data)):
-            type_str, labels, gap = process_obj(obj, remove_duplicate=remove_duplicate)
+            type_str, labels, gap, got_duplicate = process_obj(obj, remove_duplicate=remove_duplicate)
             if len(labels) == 0:
                 assert len(obj["target_norm_post_template"]) == 3
                 print("something", obj["num_list"], obj["equation"])
@@ -214,11 +217,13 @@ def main():
             count[type_str] += 1
             obj["type_str"] = type_str
             obj["equation_layer"] = labels
+            duplicate_num += 1 if got_duplicate else 0
             # if type_str == "legal":
             #     check_intermediate_m_in_order(labels)
-        write_data(file=out_file, data = data)
+        # write_data(file=out_file, data = data)
 
         print(inst_num_with_gap)
+        print(f" duplication number: {duplicate_num}")
         for key in count:
             print(f"{key}, valid number: {count[key]}, total: {len(data)}, %: {count[key] * 1.0 / len(data) * 100:.2f}")
 
