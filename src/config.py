@@ -11,6 +11,7 @@ class Config:
         self.shuffle_train_data = args.shuffle_train_data if "shuffle_train_data"  in args.__dict__ else 0
         self.train_num = args.train_num
         self.dev_num = args.dev_num
+        self.test_num = args.test_num
         self.max_seq_length = args.max_seq_length if "max_seq_length" in args.__dict__ else 0
 
         self.generated_max_length = args.generated_max_length if "generated_max_length"  in args.__dict__ else 0
@@ -49,6 +50,7 @@ class Config:
 
         self.train_file = args.train_file
         self.dev_file = args.dev_file
+        self.test_file = args.test_file
 
         self.parallel = args.parallel if "parallel" in args.__dict__ else 0
 

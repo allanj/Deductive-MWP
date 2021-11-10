@@ -59,7 +59,8 @@ class UniversalDataset(Dataset):
             self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
             self._features = []
-            for sent in test_strings:
+            self.insts = []
+            for sent, num_list in test_strings:
                 for k in range(ord('a'), ord('a') + 26):
                     sent = sent.replace(f"temp_{chr(k)}", " <quant> ")
                 res = tokenizer.encode_plus(" " + sent, add_special_tokens=True, return_attention_mask=True)
@@ -78,6 +79,7 @@ class UniversalDataset(Dataset):
                 var_mask = [1] * len(var_starts)
                 labels = [[-100, -100, -100, -100]]
                 label_height_mask = [0]
+                self.insts.append({"sent": sent, "num_list":num_list})
                 self._features.append(
                     UniFeature(input_ids=input_ids,
                                attention_mask=attention_mask,
@@ -122,9 +124,12 @@ class UniversalDataset(Dataset):
         found_duplication_inst_num = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal" and obj['type_str'] != "variable more than 7":
-                filter_type_count[obj["type_str"]] += 1
-                number_instances_filtered += 1
-                continue
+                if "^" in self.uni_labels and obj["type_str"] == "have square":
+                    pass
+                else:
+                    filter_type_count[obj["type_str"]] += 1
+                    number_instances_filtered += 1
+                    continue
             mapped_text = obj["text"]
             sent_len = len(mapped_text.split())
             for k in range(ord('a'), ord('a') + 26):
@@ -139,7 +144,7 @@ class UniversalDataset(Dataset):
                         input_text += word + " "
                     else:
                         input_text += word
-            elif "MathQA" in file or "mawps" in file:
+            elif "MathQA" in file or "mawps" in file or "svamp" in file:
                 input_text = ' '.join(mapped_text.split())
             else:
                 raise NotImplementedError
@@ -524,6 +529,23 @@ def main_for_mawps():
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
+def main_for_svamp():
+    uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+    ]
+    constants = ['1.0', '0.1', '3.0', '5.0', '0.5', '12.0', '4.0', '60.0', '25.0', '0.01', '0.05', '2.0', '10.0', '0.25', '8.0', '7.0', '100.0']
+    # constants = ['0.01', '12.0', '1.0', '100.0', '0.1', '0.5', '3.0', '4.0', '7.0']
+    constant2id = {c: idx for idx, c in enumerate(constants)}
+    constant_values = [float(c) for c in constants]
+    pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
+    tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
+    UniversalDataset(file="../../data/mawps_asdiv-a_svamp/testset_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    UniversalDataset(file="../../data/mawps_asdiv-a_svamp/trainset_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+
 def main_for_math23k():
     pretrained_language_model = 'hfl/chinese-roberta-wwm-ext'
     tokenizer = BertTokenizer.from_pretrained(pretrained_language_model)
@@ -532,6 +554,7 @@ def main_for_math23k():
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
+    uni_labels += ["^", "^_rev"]
     data_max_height = 15
     UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
@@ -556,21 +579,21 @@ def main_for_ours():
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
     data_max_height = 10
-    # UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    UniversalDataset(file="../../data/large_math/mwp_processed_extracted.json", tokenizer=tokenizer, uni_labels=uni_labels,
+                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
+    # UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/large_math/large_math_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
-                     data_max_height=data_max_height)
-    UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
-                     data_max_height=data_max_height)
-    UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
-                     data_max_height=data_max_height)
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
+    #                  data_max_height=data_max_height)
+    # UniversalDataset(file="../../data/large_math/large_math_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
+    #                  data_max_height=data_max_height)
+    # UniversalDataset(file="../../data/large_math/large_math_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
+    #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel,
+    #                  data_max_height=data_max_height)
 
 
 def main_for_mathqa():
@@ -617,10 +640,11 @@ if __name__ == '__main__':
         'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
+    # main_for_svamp()
     # main_for_mawps()
-    main_for_ours()
+    # main_for_ours()
     # main_for_mathqa()
-    # main_for_math23k()
+    main_for_math23k()
 
 
 

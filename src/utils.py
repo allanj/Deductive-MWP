@@ -43,6 +43,7 @@ def get_optimizers(config: Config, model: nn.Module, num_training_steps: int, we
 	# ]
 	optimizer = AdamW(optimizer_grouped_parameters, lr=config.learning_rate, eps=eps) # , correct_bias=False)
 	# optimizer = AdamW(optimizer_grouped_parameters, eps=eps)  # , correct_bias=False)
+	print(f"optimizer: {optimizer}")
 	warmup_step = warmup_step if warmup_step >= 0 else int(0.1 * num_training_steps)
 	scheduler = get_linear_schedule_with_warmup(
 		optimizer, num_warmup_steps=warmup_step, num_training_steps=num_training_steps

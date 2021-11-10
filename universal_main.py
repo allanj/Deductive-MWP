@@ -43,10 +43,12 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--shuffle_train_data', type=int, default=1, choices=[0, 1], help="shuffle the training data or not")
     parser.add_argument('--train_num', type=int, default=-1, help="The number of training data, -1 means all data")
     parser.add_argument('--dev_num', type=int, default=-1, help="The number of development data, -1 means all data")
+    parser.add_argument('--test_num', type=int, default=-1, help="The number of development data, -1 means all data")
 
 
     parser.add_argument('--train_file', type=str, default="data/math23k/train23k_processed_nodup.json")
-    parser.add_argument('--dev_file', type=str, default="data/math23k/test23k_processed_nodup.json")
+    parser.add_argument('--dev_file', type=str, default="data/math23k/valid23k_processed_nodup.json")
+    parser.add_argument('--test_file', type=str, default="data/math23k/test23k_processed_nodup.json")
     # parser.add_argument('--train_file', type=str, default="data/mawps-single/mawps_train_nodup.json")
     # parser.add_argument('--dev_file', type=str, default="data/mawps-single/mawps_test_nodup.json")
 
@@ -99,8 +101,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
 def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
           bert_model_name: str, num_labels: int,
-          dev: torch.device, tokenizer: PreTrainedTokenizer, valid_dataloader: DataLoader = None,
-          constant_values: List = None):
+          dev: torch.device, tokenizer: PreTrainedTokenizer, valid_dataloader: DataLoader = None, test_dataloader: DataLoader = None,
+          constant_values: List = None, res_file:str = None, error_file:str = None):
 
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
@@ -171,6 +173,10 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         if valid_dataloader is not None:
             performance = evaluate(valid_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
                                    add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0))
+            if test_dataloader is not None:
+                evaluate(test_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
+                                       add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0),
+                         res_file=res_file, err_file=error_file)
             if performance > best_performance:
                 print(f"[Model Info] Saving the best model... with performance {performance}..")
                 best_performance = performance
@@ -392,8 +398,17 @@ def main():
             constant2id = {"1": 0, "PI": 1}
             constant_values = [1.0, 3.14]
             constant_number = len(constant_values)
+        elif "svamp" in conf.train_file:
+            # ['0.01', '12.0', '1.0', '100.0', '0.1', '0.5', '3.0', '4.0', '7.0']
+            constants = ['1.0', '0.1', '3.0', '5.0', '0.5', '12.0', '4.0', '60.0', '25.0', '0.01', '0.05', '2.0',
+                         '10.0', '0.25', '8.0', '7.0', '100.0']
+            constant2id = {c: idx for idx, c in enumerate(constants)}
+            constant_values = [float(c) for c in constants]
+            constant_number = len(constant_values)
         elif "mawps" in conf.train_file:
             constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
+            if conf.train_file.split(".")[-2][-1] in ["0", "1", "2", "3", "4", "5"]:  ## 5 fold trainning
+                constants += ['10.0', '0.05']
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)
@@ -432,6 +447,16 @@ def main():
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
                                         data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
+        print("[Data Info] Reading Testing data data", flush=True)
+        test_dataset = None
+        if os.path.exists(conf.test_file):
+            test_dataset = UniversalDataset(file=conf.test_file, tokenizer=tokenizer, uni_labels=conf.uni_labels,
+                                            number=conf.dev_num, filtered_steps=opt.filtered_steps,
+                                            constant2id=constant2id, constant_values=constant_values,
+                                            add_replacement=bool(conf.add_replacement),
+                                            use_incremental_labeling=bool(conf.consider_multiple_m0),
+                                            add_new_token=bool(conf.add_new_token),
+                                            data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
         # Prepare data loader
         print("[Data Info] Loading training data", flush=True)
@@ -439,15 +464,22 @@ def main():
         print("[Data Info] Loading validation data", flush=True)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
 
+        print("[Data Info] Loading validation data", flush=True)
+        test_loader = None
+        if test_dataset is not None:
+            test_loader = DataLoader(test_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
 
+        res_file = f"results/{conf.model_folder}.res.json"
+        err_file = f"results/{conf.model_folder}.err.json"
         # Train the model
         model = train(conf, train_dataloader,
                       num_epochs= conf.num_epochs,
                       bert_model_name = bert_model_name,
-                      valid_dataloader = valid_dataloader,
+                      valid_dataloader = valid_dataloader, test_dataloader=test_loader,
                       dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
-                      constant_values=constant_values)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0), uni_labels=conf.uni_labels)
+                      constant_values=constant_values, res_file=res_file, error_file=err_file)
+        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values,
+                 add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0), uni_labels=conf.uni_labels)
     else:
         print(f"Testing the model now.")
         MODEL_CLASS = class_name_2_model[bert_model_name]
