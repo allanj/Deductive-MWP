@@ -24,6 +24,7 @@ class_name_2_quant_list = {
     "roberta-base": ['Ġ<', 'quant', '>'],
     "bert-base-multilingual-cased": ['<', 'quant', '>'],
     "xlm-roberta-base": ['▁<', 'quant', '>'],
+    'bert-base-chinese': ['<', 'q', '##uan', '##t', '>'],
     'hfl/chinese-bert-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
     'hfl/chinese-roberta-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
 }

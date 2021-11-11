@@ -22,6 +22,7 @@ class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
         "roberta-base": UniversalModel_Roberta,
         "bert-base-multilingual-cased": UniversalModel_Bert,
+        'bert-base-chinese': UniversalModel,
         "xlm-roberta-base": UniversalModel_XLMRoberta,
         'hfl/chinese-bert-wwm-ext': UniversalModel,
         'hfl/chinese-roberta-wwm-ext': UniversalModel,
@@ -375,6 +376,7 @@ def main():
         "roberta-base": RobertaTokenizerFast,
         "bert-base-multilingual-cased": BertTokenizerFast,
         "xlm-roberta-base": XLMRobertaTokenizerFast,
+        'bert-base-chinese': BertTokenizerFast,
         'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
