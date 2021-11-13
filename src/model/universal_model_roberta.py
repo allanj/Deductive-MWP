@@ -99,12 +99,20 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
 
         self.stopper = nn.Linear(config.hidden_size, 2) ## whether we need to stop or not.
         self.variable_gru = None
-        self.var_update_mode = 0 if var_update_mode == 'gru' else 1
+        if var_update_mode == 'gru':
+            self.var_update_mode = 0
+        elif var_update_mode == 'attn':
+            self.var_update_mode = 1
+        else:
+            self.var_update_mode = -1
         if self.consider_multiple_m0:
             if var_update_mode == 'gru':
                 self.variable_gru = nn.GRUCell(config.hidden_size, config.hidden_size)
-            else:
+            elif var_update_mode == 'attn':
                 self.variable_gru = nn.MultiheadAttention(embed_dim=config.hidden_size, num_heads=6, batch_first=True)
+            else:
+                print("[WARNING] no rationalizer????????")
+                self.variable_gru = None
         self.constant_num = constant_num
         self.constant_emb = None
         if self.constant_num > 0:
@@ -326,7 +334,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                         var_hidden_states = self.variable_gru(gru_inputs, init_h).view(batch_size,
                                                                                        max_num_variable + i - 1,
                                                                                        hidden_size)
-                    else:
+                    elif self.var_update_mode == 1:
                         temp_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states],
                                                 dim=1)  ## batch_size x (num_var + i) x hidden_size
                         temp_mask = torch.eye(max_num_variable + i, device=variable_indexs_start.device)
