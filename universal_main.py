@@ -17,6 +17,15 @@ from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logging.basicConfig(
+	format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+	datefmt="%m/%d/%Y %H:%M:%S",
+	level=logging.INFO,
+)
 
 class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
@@ -35,7 +44,7 @@ def set_seed(args):
     if 'cuda' in args.device:
         torch.cuda.manual_seed_all(args.seed)
     else:
-        print("[Info] YOU ARE USING CPU, change --device to cuda if you are using GPU")
+        logger.warning("YOU ARE USING CPU, change --device to cuda if you are using GPU")
 
 def parse_arguments(parser:argparse.ArgumentParser):
     # data Hyperparameters
@@ -53,7 +62,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     # parser.add_argument('--train_file', type=str, default="data/mawps-single/mawps_train_nodup.json")
     # parser.add_argument('--dev_file', type=str, default="data/mawps-single/mawps_test_nodup.json")
 
-    parser.add_argument('--filtered_steps', default=None, nargs='+', help="some heights to filter")
+    parser.add_argument('--train_filtered_steps', default=None, nargs='+', help="some heights to filter")
+    parser.add_argument('--test_filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
 
     parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
@@ -96,7 +106,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     args = parser.parse_args()
     # Print out the arguments
     for k in args.__dict__:
-        print(k + ": " + str(args.__dict__[k]))
+        logger.info(f"{k} = {args.__dict__[k]}")
     return args
 
 
@@ -122,7 +132,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         model.resize_token_embeddings(len(tokenizer))
         if model.config.tie_word_embeddings:
             model.tie_weights()
-        print(f"[Info] Added new tokens <NUM> for grading purpose, after: {len(tokenizer)}")
+        logger.info(f"[Info] Added new tokens <NUM> for grading purpose, after: {len(tokenizer)}")
 
 
     if config.parallel:
@@ -169,8 +179,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
             scheduler.step()
             model.zero_grad()
             if iter % 1000 == 0:
-                print(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}", flush=True)
-        print(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}", flush=True)
+                logger.info(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}")
+        logger.info(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}")
         if valid_dataloader is not None:
             performance = evaluate(valid_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
                                    add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0))
@@ -179,12 +189,12 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                        add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0),
                          res_file=res_file, err_file=error_file)
             if performance > best_performance:
-                print(f"[Model Info] Saving the best model... with performance {performance}..")
+                logger.info(f"[Model Info] Saving the best model... with performance {performance}..")
                 best_performance = performance
                 model_to_save = model.module if hasattr(model, "module") else model
                 model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
-    print(f"[Model Info] Best validation performance: {best_performance}")
+    logger.info(f"[Model Info] Best validation performance: {best_performance}")
     model = MODEL_CLASS.from_pretrained(f"model_files/{config.model_folder}",
                                            diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
@@ -332,7 +342,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
             corr += 1
     total = len(labels)
     acc = corr*1.0/total
-    print(f"[Info] Acc.:{acc*100:.2f} ", flush=True)
+    logger.info(f"[Info] Acc.:{acc*100:.2f} ")
 
     ##value accuarcy
     val_corr = 0
@@ -352,12 +362,12 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         inst['pred_ground_equation'] = pred_ground_equation
         inst['gold_ground_equation'] = gold_ground_equation
     val_acc = val_corr*1.0 / total
-    print(f"[Info] val Acc.:{val_acc * 100:.2f} ", flush=True)
+    logger.info(f"[Info] val Acc.:{val_acc * 100:.2f} ")
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
         curr_val_corr = num_label_step_val_corr[key]
         curr_total = num_label_step_total[key]
-        print(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total}) val acc: {curr_val_corr*1.0/curr_total * 100:.2f} ({curr_val_corr}/{curr_total})", flush=True)
+        logger.info(f"[Info] step num: {key} Acc.:{curr_corr*1.0/curr_total * 100:.2f} ({curr_corr}/{curr_total}) val acc: {curr_val_corr*1.0/curr_total * 100:.2f} ({curr_val_corr}/{curr_total})")
     if res_file is not None:
         write_data(file=res_file, data=insts)
     if err_file is not None:
@@ -387,7 +397,7 @@ def main():
     tokenizer = TOKENIZER_CLASS_NAME.from_pretrained(bert_model_name)
 
     if conf.add_new_token:
-        print(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
+        logger.info(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
         tokenizer.add_tokens('<NUM>', special_tokens=True)
 
     uni_labels = [
@@ -433,27 +443,27 @@ def main():
             constant_number = 0
     else:
         raise NotImplementedError
-    print(f"[Data Info] constant info: {constant2id}")
+    logger.info(f"[Data Info] constant info: {constant2id}")
 
 
     # Read dataset
     if opt.mode == "train":
-        print("[Data Info] Reading training data", flush=True)
-        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.train_num, filtered_steps=opt.filtered_steps,
+        logger.info("[Data Info] Reading training data")
+        dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.train_num, filtered_steps=opt.train_filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
                                    data_max_height=opt.train_max_height, pretrained_model_name=bert_model_name)
-        print("[Data Info] Reading validation data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+        logger.info("[Data Info] Reading validation data")
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                    use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
                                         data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
-        print("[Data Info] Reading Testing data data", flush=True)
+        logger.info("[Data Info] Reading Testing data data")
         test_dataset = None
         if os.path.exists(conf.test_file):
             test_dataset = UniversalDataset(file=conf.test_file, tokenizer=tokenizer, uni_labels=conf.uni_labels,
-                                            number=conf.dev_num, filtered_steps=opt.filtered_steps,
+                                            number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                             constant2id=constant2id, constant_values=constant_values,
                                             add_replacement=bool(conf.add_replacement),
                                             use_incremental_labeling=bool(conf.consider_multiple_m0),
@@ -461,12 +471,12 @@ def main():
                                             data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
         # Prepare data loader
-        print("[Data Info] Loading training data", flush=True)
+        logger.info("[Data Info] Loading training data")
         train_dataloader = DataLoader(dataset, batch_size=conf.batch_size, shuffle=conf.shuffle_train_data, num_workers=conf.num_workers, collate_fn=dataset.collate_function)
-        print("[Data Info] Loading validation data", flush=True)
+        logger.info("[Data Info] Loading validation data")
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
 
-        print("[Data Info] Loading validation data", flush=True)
+        logger.info("[Data Info] Loading validation data")
         test_loader = None
         if test_dataset is not None:
             test_loader = DataLoader(test_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
@@ -483,7 +493,7 @@ def main():
         evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values,
                  add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0), uni_labels=conf.uni_labels)
     else:
-        print(f"Testing the model now.")
+        logger.info(f"Testing the model now.")
         MODEL_CLASS = class_name_2_model[bert_model_name]
         model = MODEL_CLASS.from_pretrained(f"model_files/{conf.model_folder}",
                                                num_labels=num_labels,
@@ -492,8 +502,8 @@ def main():
                                                constant_num = constant_number,
                                             add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0,
                                             var_update_mode=conf.var_update_mode).to(conf.device)
-        print("[Data Info] Reading test data", flush=True)
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.filtered_steps,
+        logger.info("[Data Info] Reading test data")
+        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                         use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height, pretrained_model_name=bert_model_name)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
@@ -505,5 +515,6 @@ def main():
                  consider_multiple_m0=bool(conf.consider_multiple_m0), res_file=res_file, err_file=err_file)
 
 if __name__ == "__main__":
+    # logger.addHandler(logging.StreamHandler())
     main()
 

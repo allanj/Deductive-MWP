@@ -14,11 +14,12 @@ from src.eval.utils import compute_value, compute_value_for_incremental_equation
 import math
 from typing import Dict, List
 from collections import Counter
+import logging
 
-"""
-not finished yet
-"""
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+## "<quant>" token will be split into different word pieces in different tokenizers
 class_name_2_quant_list = {
     "bert-base-cased": ['<', 'q', '##uant', '>'],
     "roberta-base": ['Ġ<', 'quant', '>'],
@@ -56,6 +57,7 @@ class UniversalDataset(Dataset):
         self.data_max_height = data_max_height
         self.uni_labels = uni_labels
         self.quant_list = class_name_2_quant_list[pretrained_model_name]
+        filtered_steps = [int(v) for v in filtered_steps] if filtered_steps is not None else None
         if file is not None:
             self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
         else:
@@ -123,6 +125,7 @@ class UniversalDataset(Dataset):
         sent_len_all = 0
         filter_type_count = Counter()
         found_duplication_inst_num = 0
+        filter_step_count = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             if obj['type_str'] != "legal" and obj['type_str'] != "variable more than 7":
                 if "^" in self.uni_labels and obj["type_str"] == "have square":
@@ -256,9 +259,13 @@ class UniversalDataset(Dataset):
                         continue
                     else:
                         pass
+            if filtered_steps is not None:
+                if len(labels) not in filtered_steps:
+                    filter_step_count += 1
+                    continue
+
             label_height_mask = [1] * len(labels)
             num_step_count[len(labels)] += 1
-
             max_num_steps = max(max_num_steps, len(labels))
             ## check label all valid
             for label in labels:
@@ -280,22 +287,25 @@ class UniversalDataset(Dataset):
                            label_height_mask=label_height_mask)
             )
             self.insts.append(obj)
-        print(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
+        logger.info(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
               f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
-        print(f"filtered type counter: {filter_type_count}")
-        print(f"num mawps constant removed: {num_mawps_constant_removed}")
-        print(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
-        print(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
-        print(f"number of instances with no detected variables: {num_var_is_zero}")
-        print(f"[WARNING] find duplication num: {found_duplication_inst_num} (not removed)")
-        print(num_step_count)
+        logger.info(f"filtered type counter: {filter_type_count}")
+        logger.info(f"num mawps constant removed: {num_mawps_constant_removed}")
+        logger.info(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
+        logger.info(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
+        logger.info(f"number of instances with no detected variables: {num_var_is_zero}")
+        if found_duplication_inst_num:
+            logger.warning(f"[WARNING] find duplication num: {found_duplication_inst_num} (not removed)")
+        logger.info(f"filter step count: {filtered_steps}")
+        logger.info(num_step_count)
         avg_eq_num = equation_layer_num * 1.0/ len(self._features)
-        print(f"average operation number: {avg_eq_num}, total: {equation_layer_num}, counter: {equation_layer_num_count}")
+        logger.info(f"average operation number: {avg_eq_num}, total: {equation_layer_num}, counter: {equation_layer_num_count}")
         avg_sent_len = sent_len_all * 1.0 / len(self._features)
-        print(f"average sentence length: {avg_sent_len}, total: {sent_len_all}")
-        print(f"variable number avg: {var_num_all * 1.0 / len(self._features)}, total: {var_num_all}, counter:{var_num_count}")
+        logger.info(f"average sentence length: {avg_sent_len}, total: {sent_len_all}")
+        logger.info(f"variable number avg: {var_num_all * 1.0 / len(self._features)}, total: {var_num_all}, counter:{var_num_count}")
         ### out_file = "../../data/large_math/mwp_processed_filtered.json"
-        ### write_data(file=out_file, data= data)
+        # filtered_steps = [str(i) for i in filtered_steps]
+        # write_data(file=f"../../data/math23k/train23k_step_{''.join(filtered_steps)}.json", data=self.insts)
 
     def __len__(self) -> int:
         return len(self._features)
@@ -520,13 +530,13 @@ def main_for_mawps():
     constant_values = [float(c) for c in constants]
     pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
     tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
-    UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    test_dataset = UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    train_dataset = UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    validation_dataset = UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
@@ -555,7 +565,7 @@ def main_for_math23k():
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
-    uni_labels += ["^", "^_rev"]
+    # uni_labels += ["^", "^_rev"]
     data_max_height = 15
     UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
@@ -564,11 +574,14 @@ def main_for_math23k():
     UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_model,
-                     data_max_height=data_max_height)
+                     data_max_height=data_max_height, filtered_steps=None)
     UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_model,
                      data_max_height=data_max_height)
+
+
+
 
 def main_for_ours():
     pretrained_language_moel = 'hfl/chinese-roberta-wwm-ext'
@@ -630,6 +643,7 @@ def main_for_mathqa():
                      use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
 
 if __name__ == '__main__':
+    logger.addHandler(logging.StreamHandler())
     from transformers import BertTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
     add_replacement = True
     use_incremental_labeling = True
@@ -642,10 +656,10 @@ if __name__ == '__main__':
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
     # main_for_svamp()
-    # main_for_mawps()
+    main_for_mawps()
     # main_for_ours()
     # main_for_mathqa()
-    main_for_math23k()
+    # main_for_math23k()
 
 
 
