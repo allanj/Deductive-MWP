@@ -6,11 +6,11 @@
 diff_param=0
 filtered_steps=-1
 use_constant=1
-add_replacement=0
+add_replacement=1
 consider_multiple_m0=1
 add_new_token=0
-var_update_modes=(gru attn)
-bert_model_names=(bert-base-cased roberta-base bert-base-multilingual-cased xlm-roberta-base)
+var_update_modes=(gru)
+bert_model_names=(roberta-base)
 cuda_devices=(0 1 2 3)
 folds=(1 2 3 4 5)
 

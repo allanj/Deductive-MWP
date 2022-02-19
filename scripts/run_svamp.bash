@@ -6,7 +6,7 @@
 diff_param=0
 filtered_steps=-1
 use_constant=1
-add_replacement=1
+add_replacement=0
 consider_multiple_m0=1
 add_new_token=0
 var_update_modes=(gru)
