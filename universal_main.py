@@ -16,7 +16,7 @@ from src.model.universal_model_bert import UniversalModel_Bert
 from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
 from collections import Counter
 from src.eval.utils import is_value_correct
-from typing import List
+from typing import List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
     # data Hyperparameters
     parser.add_argument('--device', type=str, default="cpu", choices=['cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'cuda:4', 'cuda:5', 'cuda:6', 'cuda:7'], help="GPU/CPU devices")
     parser.add_argument('--batch_size', type=int, default=30)
-    parser.add_argument('--shuffle_train_data', type=int, default=1, choices=[0, 1], help="shuffle the training data or not")
     parser.add_argument('--train_num', type=int, default=-1, help="The number of training data, -1 means all data")
     parser.add_argument('--dev_num', type=int, default=-1, help="The number of development data, -1 means all data")
     parser.add_argument('--test_num', type=int, default=-1, help="The number of development data, -1 means all data")
@@ -68,8 +67,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
 
-    parser.add_argument('--add_new_token', default=0, type=int, choices=[0, 1], help="whether or not to add the new token")
-
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
     parser.add_argument('--model_folder', type=str, default="math_solver", help="the name of the models, to save the model")
@@ -79,7 +76,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
     # parser.add_argument('--bert_folder', type=str, default="", help="The folder name that contains the BERT model")
     # parser.add_argument('--bert_model_name', type=str, default="roberta-base",
     #                     help="The bert model name to used")
-    parser.add_argument('--diff_param_for_height', type=int, default=0, choices=[0,1])
     parser.add_argument('--height', type=int, default=10, help="the model height")
     parser.add_argument('--train_max_height', type=int, default=100, help="the maximum height for training data")
     parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
@@ -91,7 +87,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--learning_rate', type=float, default=2e-5, help="learning rate of the AdamW optimizer")
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help="The maximum gradient norm")
     parser.add_argument('--num_epochs', type=int, default=20, help="The number of epochs to run")
-    parser.add_argument('--temperature', type=float, default=1.0, help="The temperature during the training")
     parser.add_argument('--fp16', type=int, default=0, choices=[0,1], help="using fp16 to train the model")
 
     parser.add_argument('--parallel', type=int, default=0, choices=[0,1], help="parallelizing model")
@@ -121,19 +116,12 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     constant_num = len(constant_values) if constant_values else 0
     MODEL_CLASS = class_name_2_model[bert_model_name]
     model = MODEL_CLASS.from_pretrained(bert_model_name,
-                                           diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
                                            add_replacement=bool(config.add_replacement),
                                            consider_multiple_m0=bool(config.consider_multiple_m0),
                                             var_update_mode=config.var_update_mode).to(dev)
-    if config.add_new_token:
-        model.resize_token_embeddings(len(tokenizer))
-        if model.config.tie_word_embeddings:
-            model.tie_weights()
-        logger.info(f"[Info] Added new tokens <NUM> for grading purpose, after: {len(tokenizer)}")
-
 
     if config.parallel:
         model = nn.DataParallel(model)
@@ -145,7 +133,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     optimizer, scheduler = get_optimizers(config, model, t_total)
     model.zero_grad()
 
-    best_performance = -1
+    best_val_acc_performance = -1
     os.makedirs(f"model_files/{config.model_folder}", exist_ok=True)
 
     for epoch in range(num_epochs):
@@ -182,21 +170,20 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                 logger.info(f"epoch: {epoch}, iteration: {iter}, current mean loss: {total_loss/iter:.2f}")
         logger.info(f"Finish epoch: {epoch}, loss: {total_loss:.2f}, mean loss: {total_loss/len(train_dataloader):.2f}")
         if valid_dataloader is not None:
-            performance = evaluate(valid_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
+            equ_acc, val_acc_performance = evaluate(valid_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
                                    add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0))
             if test_dataloader is not None:
                 evaluate(test_dataloader, model, dev, uni_labels=config.uni_labels, fp16=bool(config.fp16), constant_values=constant_values,
                                        add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0),
                          res_file=res_file, err_file=error_file)
-            if performance > best_performance:
-                logger.info(f"[Model Info] Saving the best model... with performance {performance}..")
-                best_performance = performance
+            if val_acc_performance > best_val_acc_performance:
+                logger.info(f"[Model Info] Saving the best model... with performance (value accuracy) {val_acc_performance:.6f}")
+                best_val_acc_performance = val_acc_performance
                 model_to_save = model.module if hasattr(model, "module") else model
                 model_to_save.save_pretrained(f"model_files/{config.model_folder}")
                 tokenizer.save_pretrained(f"model_files/{config.model_folder}")
-    logger.info(f"[Model Info] Best validation performance: {best_performance}")
+    logger.info(f"[Model Info] Best validation performance: {best_val_acc_performance}")
     model = MODEL_CLASS.from_pretrained(f"model_files/{config.model_folder}",
-                                           diff_param_for_height=config.diff_param_for_height,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
@@ -276,7 +263,7 @@ def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num:
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, uni_labels:List,
              add_replacement: bool = False, consider_multiple_m0: bool = False, res_file: str= None, err_file:str = None,
-             num_beams:int = 1) -> float:
+             num_beams:int = 1) -> Tuple[float, float]:
     model.eval()
     predictions = []
     labels = []
@@ -328,6 +315,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     num_label_step_corr = Counter()
     num_label_step_total = Counter()
     insts = valid_dataloader.dataset.insts
+    number_instances_more_than_max_height_filtered = valid_dataloader.dataset.number_instances_more_than_max_height_filtered
     for inst_predictions, inst_labels in zip(predictions, labels):
         num_label_step_total[len(inst_labels)] += 1
         if len(inst_predictions) != len(inst_labels):
@@ -341,8 +329,9 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
             num_label_step_corr[len(inst_labels)] += 1
             corr += 1
     total = len(labels)
-    acc = corr*1.0/total
-    logger.info(f"[Info] Acc.:{acc*100:.2f} ")
+    adjusted_total = total + number_instances_more_than_max_height_filtered
+    acc = corr*1.0/adjusted_total
+    logger.info(f"[Info] Equation accuracy: {acc*100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
 
     ##value accuarcy
     val_corr = 0
@@ -361,8 +350,8 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         inst["gold_value"] = gold_value
         inst['pred_ground_equation'] = pred_ground_equation
         inst['gold_ground_equation'] = gold_ground_equation
-    val_acc = val_corr*1.0 / total
-    logger.info(f"[Info] val Acc.:{val_acc * 100:.2f} ")
+    val_acc = val_corr * 1.0 / adjusted_total
+    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
         curr_val_corr = num_label_step_val_corr[key]
@@ -372,7 +361,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         write_data(file=res_file, data=insts)
     if err_file is not None:
         write_data(file=err_file, data=err)
-    return val_acc
+    return acc, val_acc
 
 def main():
     parser = argparse.ArgumentParser(description="classificaton")
@@ -396,9 +385,6 @@ def main():
 
     tokenizer = TOKENIZER_CLASS_NAME.from_pretrained(bert_model_name)
 
-    if conf.add_new_token:
-        logger.info(f"[INFO] Adding new tokens <NUM> for numbering purpose, before: {len(tokenizer)}")
-        tokenizer.add_tokens('<NUM>', special_tokens=True)
 
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
@@ -451,12 +437,12 @@ def main():
         logger.info("[Data Info] Reading training data")
         dataset = UniversalDataset(file=conf.train_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.train_num, filtered_steps=opt.train_filtered_steps,
                                    constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0),
                                    data_max_height=opt.train_max_height, pretrained_model_name=bert_model_name)
         logger.info("[Data Info] Reading validation data")
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                   use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token),
+                                   use_incremental_labeling=bool(conf.consider_multiple_m0),
                                         data_max_height=conf.height, pretrained_model_name=bert_model_name)
 
         logger.info("[Data Info] Reading Testing data data")
@@ -467,18 +453,17 @@ def main():
                                             constant2id=constant2id, constant_values=constant_values,
                                             add_replacement=bool(conf.add_replacement),
                                             use_incremental_labeling=bool(conf.consider_multiple_m0),
-                                            add_new_token=bool(conf.add_new_token),
                                             data_max_height=conf.height, pretrained_model_name=bert_model_name)
-
+        logger.info(f"[Data Info] Training instances: {len(dataset)}, Validation instances: {len(eval_dataset)}")
+        if test_dataset is not None:
+            logger.info(f"[Data Info] Testing instances: {len(test_dataset)}")
         # Prepare data loader
-        logger.info("[Data Info] Loading training data")
-        train_dataloader = DataLoader(dataset, batch_size=conf.batch_size, shuffle=conf.shuffle_train_data, num_workers=conf.num_workers, collate_fn=dataset.collate_function)
-        logger.info("[Data Info] Loading validation data")
+        logger.info("[Data Info] Loading data")
+        train_dataloader = DataLoader(dataset, batch_size=conf.batch_size, shuffle=True, num_workers=conf.num_workers, collate_fn=dataset.collate_function)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
-
-        logger.info("[Data Info] Loading validation data")
         test_loader = None
         if test_dataset is not None:
+            logger.info("[Data Info] Loading Test data")
             test_loader = DataLoader(test_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=conf.num_workers, collate_fn=eval_dataset.collate_function)
 
         res_file = f"results/{conf.model_folder}.res.json"
@@ -497,7 +482,6 @@ def main():
         MODEL_CLASS = class_name_2_model[bert_model_name]
         model = MODEL_CLASS.from_pretrained(f"model_files/{conf.model_folder}",
                                                num_labels=num_labels,
-                                               diff_param_for_height=conf.diff_param_for_height,
                                                height = conf.height,
                                                constant_num = constant_number,
                                             add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0,
@@ -505,7 +489,7 @@ def main():
         logger.info("[Data Info] Reading test data")
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
-                                        use_incremental_labeling=bool(conf.consider_multiple_m0), add_new_token=bool(conf.add_new_token), data_max_height=conf.height, pretrained_model_name=bert_model_name)
+                                        use_incremental_labeling=bool(conf.consider_multiple_m0), data_max_height=conf.height, pretrained_model_name=bert_model_name)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,
                                       collate_fn=eval_dataset.collate_function)
         os.makedirs("results", exist_ok=True)

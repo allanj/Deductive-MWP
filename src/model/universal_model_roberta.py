@@ -43,7 +43,6 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
 class UniversalModel_Roberta(RobertaPreTrainedModel):
 
     def __init__(self, config: RobertaConfig,
-                 diff_param_for_height:bool=True,
                  height: int = 4,
                  constant_num: int = 0,
                  add_replacement: bool = False,
@@ -51,7 +50,6 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         """
         Constructor for model function
         :param config:
-        :param diff_param_for_height: whether we want to use different layers/parameters for different height
         :param height: the maximum number of height we want to use
         :param constant_num: the number of constant we consider
         :param add_replacement: only at h=0, whether we want to consider somehting like "a*a" or "a+a"
@@ -68,28 +66,16 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         self.consider_multiple_m0 = bool(consider_multiple_m0)
 
         self.label_rep2label = nn.Linear(config.hidden_size, 1) # 0 or 1
-        self.diff_param_for_height = diff_param_for_height
         self.max_height = height ## 3 operation
         self.linears = nn.ModuleList()
-        if diff_param_for_height:
-            for h in range(self.max_height):
-                current_linears = nn.ModuleList()
-                for i in range(self.num_labels):
-                    current_linears.append(nn.Sequential(
-                        nn.Linear(3 * config.hidden_size, config.hidden_size),
-                        nn.ReLU(),
-                        nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
-                        nn.Dropout(config.hidden_dropout_prob)
-                    ))
-                self.linears.append(current_linears)
-        else:
-            for i in range(self.num_labels):
-                self.linears.append(nn.Sequential(
-                    nn.Linear(3 * config.hidden_size, config.hidden_size),
-                    nn.ReLU(),
-                    nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
-                    nn.Dropout(config.hidden_dropout_prob)
-                ))
+        for i in range(self.num_labels):
+            self.linears.append(nn.Sequential(
+                nn.Linear(3 * config.hidden_size, config.hidden_size),
+                nn.ReLU(),
+                nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+                nn.Dropout(config.hidden_dropout_prob)
+            ))
+
         self.stopper_transformation = nn.Sequential(
                     nn.Linear(config.hidden_size, config.hidden_size),
                     nn.ReLU(),
@@ -199,7 +185,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         all_logits = []
         best_mi_scores = None
         for i in range(max_height):
-            linear_modules = self.linears[i] if self.diff_param_for_height else self.linears
+            linear_modules = self.linears
             if i == 0:
                 ## max_num_variable = 4. -> [0,1,2,3]
                 num_var_range = torch.arange(0, max_num_variable, device=variable_indexs_start.device)
