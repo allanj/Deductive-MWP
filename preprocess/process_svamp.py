@@ -228,20 +228,62 @@ def process_obj(obj: Dict, remove_duplicate: bool = False):
 
     return type_str, labels, gap, got_duplicate
 
-def main():
+def replace_mawps():
+    svamp_train = read_data("../data/mawps_asdiv-a_svamp/trainset.json")
+    d1 = read_data("../data/mawps-single/mawps_train_nodup.json")
+    d2 = read_data("../data/mawps-single/mawps_valid_nodup.json")
+    d3 = read_data("../data/mawps-single/mawps_test_nodup.json")
+    mawps_data = d1 + d2 + d3
+    # svamp_id2mawps_id = {}
+    mapws_id2svamp_id = {}
+    mapws_id2obj = {}
+    svamp_id2mapws_obj = {}
+    num_not_found = 0
+    for obj in tqdm(mawps_data, total=len(mawps_data), desc="replace mawps"):
+        found = False
+        for svamp_obj in svamp_train:
+            question = svamp_obj["Question"]
+            # if svamp_obj["id"] == "0":
+            #     print("sss")
+            for i in range(0, 20):
+                question = question.replace(f"number{i}", f"temp_{chr(ord('a') + i)}")
+            #"Numbers": "25.0 17.0 10.0",
+            num_list = [float(val) for val in svamp_obj["Numbers"].split()]
+            if question == obj['text'] and num_list == obj["num_list"]:
+                found = True
+                assert obj["iIndex"] not in mapws_id2svamp_id
+                mapws_id2svamp_id[obj["iIndex"]] = svamp_obj["id"]
+                mapws_id2obj[obj["iIndex"]] = obj
+                # assert svamp_obj["id"] not in svamp_id2mawps_id
+                # svamp_id2mawps_id[svamp_obj["id"]] = obj
+                break
+        try:
+            assert found
+        except:
+            num_not_found +=1
+    for mawps_id, svamp_id in mapws_id2svamp_id.items():
+        mawps_obj = mapws_id2obj[mawps_id]
+        svamp_id2mapws_obj[svamp_id] = mawps_obj
+    print(f"num not found : {num_not_found}, num found: {len(mapws_id2svamp_id)} over: {len(mawps_data)}")
+    return svamp_id2mapws_obj
+
+def main(use_replace: bool):
+    svamp_id2mapws_obj = replace_mawps() if use_replace else {}
+    suffix = "_rp" if use_replace else ""
     remove_duplicate = True
     for in_file in ["trainset.json", "testset.json"]:
         print(f"working on... {in_file}")
         in_file = f"../data/mawps_asdiv-a_svamp/{in_file}"
-        out_file = in_file.split(".json")[0] + "_nodup.json"
+        out_file = in_file.split(".json")[0] + f"_nodup{suffix}.json"
         data = read_data(in_file)
         count = Counter()
         inst_num_with_gap = 0
         duplicate_num = 0
+        new_data = []
         for obj in tqdm(data, desc="processing data", total=len(data)):
-            if obj["id"] == "3258":
-                print("sss")
-                pass
+            if obj["id"] in svamp_id2mapws_obj and "train" in in_file:
+                new_data.append(svamp_id2mapws_obj[obj["id"]])
+                continue
             type_str, labels, gap, got_duplicate = process_obj(obj, remove_duplicate=remove_duplicate)
                 # continue
             if len(labels) == 0:
@@ -261,9 +303,10 @@ def main():
             obj["text"] = question
             obj["answer"] = obj.pop("Answer")
             duplicate_num += 1 if got_duplicate else 0
+            new_data.append(obj)
             # if type_str == "legal":
             #     check_intermediate_m_in_order(labels)
-        write_data(file=out_file, data = data)
+        write_data(file=out_file, data = new_data)
 
         print(inst_num_with_gap)
         print(f" duplication number: {duplicate_num}")
@@ -277,7 +320,6 @@ def main():
 if __name__ == '__main__':
     const_list = set()
     const2num = Counter()
-    # text = "a () * c"
-    # print(re.sub(r"\(.*\)", "temp_m", text))
-    main()
-    # print(breakit('(((a+b)+a)+c)'))
+    use_replace = True
+    main(use_replace)
+    # replace_mawps()
