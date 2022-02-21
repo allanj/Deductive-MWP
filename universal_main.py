@@ -18,6 +18,7 @@ from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List, Tuple
 import logging
+from transformers import set_seed
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,15 +37,6 @@ class_name_2_model = {
         'hfl/chinese-bert-wwm-ext': UniversalModel,
         'hfl/chinese-roberta-wwm-ext': UniversalModel,
     }
-
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if 'cuda' in args.device:
-        torch.cuda.manual_seed_all(args.seed)
-    else:
-        logger.warning("YOU ARE USING CPU, change --device to cuda if you are using GPU")
 
 def parse_arguments(parser:argparse.ArgumentParser):
     # data Hyperparameters
@@ -315,7 +307,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     num_label_step_corr = Counter()
     num_label_step_total = Counter()
     insts = valid_dataloader.dataset.insts
-    number_instances_more_than_max_height_filtered = valid_dataloader.dataset.number_instances_more_than_max_height_filtered
+    number_instances_remove = valid_dataloader.dataset.number_instances_remove
     for inst_predictions, inst_labels in zip(predictions, labels):
         num_label_step_total[len(inst_labels)] += 1
         if len(inst_predictions) != len(inst_labels):
@@ -329,7 +321,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
             num_label_step_corr[len(inst_labels)] += 1
             corr += 1
     total = len(labels)
-    adjusted_total = total + number_instances_more_than_max_height_filtered
+    adjusted_total = total + number_instances_remove
     acc = corr*1.0/adjusted_total
     logger.info(f"[Info] Equation accuracy: {acc*100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
 
@@ -366,7 +358,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
 def main():
     parser = argparse.ArgumentParser(description="classificaton")
     opt = parse_arguments(parser)
-    set_seed(opt)
+    set_seed(opt.seed)
     conf = Config(opt)
 
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" or conf.bert_folder=="none" else f"{conf.bert_folder}/{conf.bert_model_name}"

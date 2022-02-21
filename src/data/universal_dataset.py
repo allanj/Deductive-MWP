@@ -103,19 +103,9 @@ class UniversalDataset(Dataset):
             data = data[:number]
         # ## tokenization
         self._features = []
-        num_cant_find_labels = 0
         max_num_steps = 0
         self.insts = []
-        num_index_error = 0
-        number_instances_filtered = 0
-        number_instances_more_than_max_height_filtered= 0
         num_step_count = Counter()
-        num_empty_equation = 0
-        max_intermediate_num_for_parallel = 0
-        num_mawps_constant_removed = 0
-        not_equal_num = 0
-        answer_calculate_exception = 0
-        num_var_is_zero = 0
         equation_layer_num = 0
         equation_layer_num_count = Counter()
         var_num_all =0
@@ -130,13 +120,14 @@ class UniversalDataset(Dataset):
                     pass
                 else:
                     filter_type_count[obj["type_str"]] += 1
-                    number_instances_filtered += 1
                     continue
             mapped_text = obj["text"]
             sent_len = len(mapped_text.split())
+            ## replace the variable with <quant>
             for k in range(ord('a'), ord('a') + 26):
                 mapped_text = mapped_text.replace(f"temp_{chr(k)}", " <quant> ")
-            if "math23k" in file or "large_math" in file:
+            ## obtain the text string
+            if "math23k" in file:
                 mapped_text = mapped_text.split()
                 input_text = ""
                 for idx, word in enumerate(mapped_text):
@@ -149,7 +140,7 @@ class UniversalDataset(Dataset):
             elif "MathQA" in file or "mawps" in file or "svamp" in file:
                 input_text = ' '.join(mapped_text.split())
             else:
-                raise NotImplementedError
+                raise NotImplementedError("The file type is not supported")
             res = tokenizer.encode_plus(" " + input_text, add_special_tokens=True, return_attention_mask=True)
             input_ids = res["input_ids"]
             attention_mask = res["attention_mask"]
@@ -158,21 +149,22 @@ class UniversalDataset(Dataset):
             var_ends = []
             quant_num = len(self.quant_list)
             # quants = ['<', 'q', '##uan', '##t', '>'] if not is_roberta_tokenizer else ['Ġ<', 'quant', '>']
+            # obtain the start and end position of "<quant>" token
             for k, token in enumerate(tokens):
                 if (token == self.quant_list[0]) and tokens[k:k + quant_num] == self.quant_list:
                     var_starts.append(k)
                     var_ends.append(k + quant_num - 1)
 
-            assert len(input_ids) < 512
+            assert len(input_ids) < 512 ## make sure no error in tokenization
             num_variable = len(var_starts)
             assert len(var_starts) == len(obj["num_list"])
             if len(obj["num_list"]) == 0:
-                num_var_is_zero += 1
+                filter_type_count["no detected variable"] += 1
                 obj['type_str'] = "no detected variable"
                 continue
             var_mask = [1] * num_variable
             if len(obj["equation_layer"])  == 0:
-                num_empty_equation += 1
+                filter_type_count["empty equation in the data"]  += 1
                 obj['type_str'] = "empty eqution"
                 continue
 
@@ -192,26 +184,19 @@ class UniversalDataset(Dataset):
                 labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
 
             if not labels:
-                num_cant_find_labels += 1
+                filter_type_count["cannot obtain the label sequence"] += 1
                 obj['type_str'] = "illegal"
-                number_instances_more_than_max_height_filtered +=1
                 continue
             # compute_value(labels, obj["num_list"])
 
             if len(labels) > self.data_max_height:
-                number_instances_more_than_max_height_filtered += 1
+                filter_type_count[f"larger than the max height {self.data_max_height}"] += 1
                 continue
-            if "parallel" in file:
-                for equations in labels:
-                    for left, right, _, _ in equations:
-                        assert left <= right
-            else:
-                for left, right, _, _ in labels:
-                    assert left <= right
-
+            for left, right, _, _ in labels:
+                assert left <= right
 
             if isinstance(labels, str):
-                num_index_error += 1
+                filter_type_count[f"index error for labels"] += 1
                 obj['type_str'] = "illegal"
                 continue
             try:
@@ -221,8 +206,7 @@ class UniversalDataset(Dataset):
                     res = compute_value(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
             except:
                 # print("answer calculate exception")
-                answer_calculate_exception += 1
-                number_instances_more_than_max_height_filtered+= 1
+                filter_type_count[f"answer_calculate_exception"] += 1
                 obj['type_str'] = "illegal"
                 continue
 
@@ -234,13 +218,13 @@ class UniversalDataset(Dataset):
                     assert math.fabs(diff) < 1
             except:
                 # traceback.print_exc()
-                # print("not equal", flush=True)
-                not_equal_num += 1
                 obj['type_str'] = "illegal"
                 if "test" in file or "valid" in file:
+                    filter_type_count[f"answer not equal"] += 1
                     continue
                 else:
                     if "MathQA" in file:
+                        filter_type_count[f"answer not equal"] += 1
                         continue
                     else:
                         pass
@@ -272,26 +256,20 @@ class UniversalDataset(Dataset):
                            label_height_mask=label_height_mask)
             )
             self.insts.append(obj)
-        logger.info(f"number of instances that cannot find labels in m0: {num_cant_find_labels}, empty_equation: {num_empty_equation}, total number instances: {len(self._features)},"
-              f"max num steps: {max_num_steps}, number_instances_filtered: {number_instances_filtered}, num_index_error: {num_index_error}")
+        logger.info(f", total number instances: {len(self._features)} (before filter: {len(data)}), max num steps: {max_num_steps}")
+        self.number_instances_remove = sum(filter_type_count.values())
         logger.info(f"filtered type counter: {filter_type_count}")
-        logger.info(f"num mawps constant removed: {num_mawps_constant_removed}")
-        logger.info(f"totla number of answer not equal (skipping): {not_equal_num}, answer calculate exception: {answer_calculate_exception}")
-        logger.info(f"number of instances that have more than max height filtered: {number_instances_more_than_max_height_filtered}")
-        self.number_instances_more_than_max_height_filtered = number_instances_more_than_max_height_filtered
-        logger.info(f"number of instances with no detected variables: {num_var_is_zero}")
+        logger.info(f"number of instances removed: {self.number_instances_remove}")
+        assert self.number_instances_remove == len(data) - len(self._features)
         if found_duplication_inst_num:
             logger.warning(f"[WARNING] find duplication num: {found_duplication_inst_num} (not removed)")
-        logger.info(f"filter step count: {filtered_steps}")
+        logger.debug(f"filter step count: {filtered_steps}")
         logger.info(num_step_count)
         avg_eq_num = equation_layer_num * 1.0/ len(self._features)
-        logger.info(f"average operation number: {avg_eq_num}, total: {equation_layer_num}, counter: {equation_layer_num_count}")
+        logger.debug(f"average operation number: {avg_eq_num}, total: {equation_layer_num}, counter: {equation_layer_num_count}")
         avg_sent_len = sent_len_all * 1.0 / len(self._features)
-        logger.info(f"average sentence length: {avg_sent_len}, total: {sent_len_all}")
-        logger.info(f"variable number avg: {var_num_all * 1.0 / len(self._features)}, total: {var_num_all}, counter:{var_num_count}")
-        ### out_file = "../../data/large_math/mwp_processed_filtered.json"
-        # filtered_steps = [str(i) for i in filtered_steps]
-        # write_data(file=f"../../data/math23k/train23k_step_{''.join(filtered_steps)}.json", data=self.insts)
+        logger.debug(f"average sentence length: {avg_sent_len}, total: {sent_len_all}")
+        logger.debug(f"variable number avg: {var_num_all * 1.0 / len(self._features)}, total: {var_num_all}, counter:{var_num_count}")
 
     def __len__(self) -> int:
         return len(self._features)
@@ -602,7 +580,7 @@ if __name__ == '__main__':
     logger.addHandler(logging.StreamHandler())
     from transformers import BertTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
     add_replacement = True
-    use_incremental_labeling = False
+    use_incremental_labeling = True
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
@@ -612,9 +590,9 @@ if __name__ == '__main__':
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
     # main_for_svamp()
-    main_for_mawps()
+    # main_for_mawps()
     # main_for_mathqa()
-    # main_for_math23k()
+    main_for_math23k()
 
 
 
