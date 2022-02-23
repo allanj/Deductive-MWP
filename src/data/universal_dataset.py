@@ -566,13 +566,13 @@ def main_for_mathqa():
     # UniversalDataset(file="../../data/MathQA/debug.json", tokenizer=tokenizer, uni_labels=uni_labels,
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
     #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    UniversalDataset(file="../../data/MathQA/mathqa_test_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
                      use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
                      use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
-    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
+    UniversalDataset(file="../../data/MathQA/mathqa_train_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
                      use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
 

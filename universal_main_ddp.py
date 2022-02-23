@@ -19,14 +19,22 @@ from src.eval.utils import is_value_correct
 from typing import List, Tuple
 import logging
 from transformers import set_seed
+from accelerate import Accelerator
+from accelerate.utils import pad_across_processes
+from accelerate import DistributedDataParallelKwargs
+# ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+accelerator = Accelerator()
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 logging.basicConfig(
-	format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-	datefmt="%m/%d/%Y %H:%M:%S",
-	level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
 )
+if accelerator.is_local_main_process:
+    logger.setLevel(logging.INFO)  ## so only print something in main process
+else:
+    logger.setLevel(logging.WARNING)
 
 class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
@@ -104,6 +112,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
 
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
+    t_total = int(t_total // accelerator.num_processes)
 
     constant_num = len(constant_values) if constant_values else 0
     MODEL_CLASS = class_name_2_model[bert_model_name]
@@ -113,20 +122,18 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            constant_num=constant_num,
                                            add_replacement=bool(config.add_replacement),
                                            consider_multiple_m0=bool(config.consider_multiple_m0),
-                                            var_update_mode=config.var_update_mode, return_dict=True).to(dev)
-
-    if config.parallel:
-        model = nn.DataParallel(model)
-
-    scaler = None
-    if config.fp16:
-        scaler = torch.cuda.amp.GradScaler(enabled=bool(config.fp16))
+                                            var_update_mode=config.var_update_mode, return_dict=True)
 
     optimizer, scheduler = get_optimizers(config, model, t_total)
     model.zero_grad()
 
+    best_equ_acc = -1
     best_val_acc_performance = -1
     os.makedirs(f"model_files/{config.model_folder}", exist_ok=True)
+
+    model, optimizer, train_dataloader, valid_dataloader = accelerator.prepare(model, optimizer, train_dataloader, valid_dataloader)
+    if test_dataloader is not None:
+        test_dataloader = accelerator.prepare(test_dataloader)
 
     for epoch in range(num_epochs):
         total_loss = 0
@@ -134,28 +141,11 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
         for iter, feature in tqdm(enumerate(train_dataloader, 1), desc="--training batch", total=len(train_dataloader)):
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=bool(config.fp16)):
-                loss = model(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                             token_type_ids=feature.token_type_ids.to(dev),
-                             variable_indexs_start=feature.variable_indexs_start.to(dev),
-                             variable_indexs_end=feature.variable_indexs_end.to(dev),
-                             num_variables = feature.num_variables.to(dev),
-                             variable_index_mask= feature.variable_index_mask.to(dev),
-                             labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                             return_dict=True).loss
-            if config.parallel:
-                loss = loss.sum()
-            if config.fp16:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-            else:
-                loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                loss = model(**feature._asdict()).loss
+            accelerator.backward(loss)
+            accelerator.clip_grad_norm_(model.parameters(), config.max_grad_norm)
             total_loss += loss.item()
-            if config.fp16:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
+            optimizer.step()
             scheduler.step()
             model.zero_grad()
             if iter % 1000 == 0:
@@ -170,26 +160,18 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                        add_replacement=bool(config.add_replacement), consider_multiple_m0=bool(config.consider_multiple_m0),
                          res_file=res_file, err_file=error_file)
             if val_acc_performance > best_val_acc_performance:
-                logger.info(f"[Model Info] Saving the best model with best valid val acc {val_acc_performance:.6f} at epoch {epoch} ("
-                            f"valid_equ: {equ_acc:.6f}, valid_val: {val_acc_performance:.6f}"
-                             f" test_equ: {test_equ_acc:.6f}, test_val: {test_val_acc:.6f}"
-                            f")")
+                logger.info(
+                    f"[Model Info] Saving the best model with best valid val acc {val_acc_performance:.6f} at epoch {epoch} ("
+                    f"valid_equ: {equ_acc:.6f}, valid_val: {val_acc_performance:.6f}"
+                    f" test_equ: {test_equ_acc:.6f}, test_val: {test_val_acc:.6f}"
+                    f")")
                 best_val_acc_performance = val_acc_performance
-                model_to_save = model.module if hasattr(model, "module") else model
-                model_to_save.save_pretrained(f"model_files/{config.model_folder}")
-                tokenizer.save_pretrained(f"model_files/{config.model_folder}")
-    logger.info(f"[Model Info] Best validation performance: {best_val_acc_performance}")
-    model = MODEL_CLASS.from_pretrained(f"model_files/{config.model_folder}",
-                                           num_labels=num_labels,
-                                           height=config.height,
-                                           constant_num=constant_num,
-                                           add_replacement=bool(config.add_replacement),
-                                           consider_multiple_m0=bool(config.consider_multiple_m0), var_update_mode=config.var_update_mode).to(dev)
-    if config.fp16:
-        model.half()
-        model.save_pretrained(f"model_files/{config.model_folder}")
-        tokenizer.save_pretrained(f"model_files/{config.model_folder}")
-    return model
+                best_equ_acc = equ_acc
+                if accelerator.is_local_main_process:
+                    model_to_save = accelerator.unwrap_model(model)
+                    model_to_save.save_pretrained(f"model_files/{config.model_folder}")
+                    tokenizer.save_pretrained(f"model_files/{config.model_folder}")
+    logger.info(f"[Model Info] Best validation value performance: {best_val_acc_performance} (best_equ_acc: {best_equ_acc})")
 
 def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.FloatTensor, constant_num: int, add_replacement: bool = False):
     batch_size, max_num_variable = feature.variable_indexs_start.size()
@@ -258,8 +240,7 @@ def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num:
     return batched_prediction
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, uni_labels:List,
-             add_replacement: bool = False, consider_multiple_m0: bool = False, res_file: str= None, err_file:str = None,
-             num_beams:int = 1) -> Tuple[float, float]:
+             add_replacement: bool = False, consider_multiple_m0: bool = False, res_file: str= None, err_file:str = None) -> Tuple[float, float]:
     model.eval()
     predictions = []
     labels = []
@@ -267,37 +248,21 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     with torch.no_grad():
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
-                module = model.module if hasattr(model, 'module') else model
-                if num_beams == 1:
-                    all_logits = module(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                                 token_type_ids=feature.token_type_ids.to(dev),
-                                 variable_indexs_start=feature.variable_indexs_start.to(dev),
-                                 variable_indexs_end=feature.variable_indexs_end.to(dev),
-                                 num_variables = feature.num_variables.to(dev),
-                                 variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                                 return_dict=True, is_eval=True).all_logits
-                    batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
-                        if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
+                all_logits = model(**feature._asdict(), is_eval=True).all_logits
+                batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
+                    if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
 
-                else:
-                    batched_prediction, _ =  module.beam_search(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                                 token_type_ids=feature.token_type_ids.to(dev),
-                                 variable_indexs_start=feature.variable_indexs_start.to(dev),
-                                 variable_indexs_end=feature.variable_indexs_end.to(dev),
-                                 num_variables = feature.num_variables.to(dev),
-                                 variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                                 return_dict=True, is_eval=True, num_beams=num_beams)
-                    batched_prediction = batched_prediction[:, 0, :, :].numpy().astype(int).tolist()
-                ## post process remve extra
+                batched_prediction = accelerator.gather(batched_prediction)
+                batched_labels = accelerator.gather(feature.labels)
+
+                ## post process remve extra padding step
                 for b, inst_predictions in enumerate(batched_prediction):
                     for p, prediction_step in enumerate(inst_predictions):
                         left, right, op_id, stop_id = prediction_step
                         if stop_id == 1:
                             batched_prediction[b] = batched_prediction[b][:(p+1)]
                             break
-                batched_labels = feature.labels.cpu().numpy().tolist()
+                batched_labels = batched_labels.cpu().numpy().tolist()
                 for b, inst_labels in enumerate(batched_labels):
                     for p, label_step in enumerate(inst_labels):
                         left, right, op_id, stop_id = label_step
@@ -333,7 +298,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     val_corr = 0
     num_label_step_val_corr = Counter()
     err = []
-    corr += 0
+    corr = 0
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
         is_value_corr, predict_value, gold_value, pred_ground_equation, gold_ground_equation = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, uni_labels=uni_labels, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
@@ -466,14 +431,12 @@ def main():
         res_file = f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
         # Train the model
-        model = train(conf, train_dataloader,
-                      num_epochs= conf.num_epochs,
-                      bert_model_name = bert_model_name,
-                      valid_dataloader = valid_dataloader, test_dataloader=test_loader,
-                      dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
-                      constant_values=constant_values, res_file=res_file, error_file=err_file)
-        evaluate(valid_dataloader, model, conf.device, fp16=bool(conf.fp16), constant_values=constant_values,
-                 add_replacement=bool(conf.add_replacement), consider_multiple_m0=bool(conf.consider_multiple_m0), uni_labels=conf.uni_labels)
+        train(conf, train_dataloader,
+                  num_epochs = conf.num_epochs,
+                  bert_model_name = bert_model_name,
+                  valid_dataloader = valid_dataloader, test_dataloader=test_loader,
+                  dev=conf.device, tokenizer=tokenizer, num_labels=num_labels,
+                  constant_values=constant_values, res_file=res_file, error_file=err_file)
     else:
         logger.info(f"Testing the model now.")
         MODEL_CLASS = class_name_2_model[bert_model_name]
