@@ -27,7 +27,26 @@ def get_variable_to_num(file):
     print(f" operation num2inst num: {operation_num2inst_num}")
 
 
-if __name__ == '__main__':
-    get_variable_to_num("../data/math23k/whole_processed.json")
+def get_opreation2_num(file):
+    opnum = Counter()
+    data = read_data(file=file)
+    res = []
+    for obj in data:
+        target_norm_post_template = obj["target_norm_post_template"]
+        cur_op_num = 0
+        for word in target_norm_post_template:
+            if word in ["+", "-", "*", "/", "^"]:
+                cur_op_num += 1
+        opnum[cur_op_num] += 1
+        res.append({
+            "id": obj["id"],
+            "operation_num": cur_op_num
+        })
+    print(f"Total number of data: opnum; {opnum}")
+    write_data("../data/math23k/operation_num.json", res)
 
+
+if __name__ == '__main__':
+    # get_variable_to_num("../data/math23k/whole_processed.json")
+    get_opreation2_num("../data/math23k/test23k_processed.json")
     # write_data(file="../data/math23k/whole_processed_convert.json",data=read_data("../data/math23k/whole_processed.json"))

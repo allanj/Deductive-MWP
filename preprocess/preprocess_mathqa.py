@@ -274,7 +274,7 @@ def process_file(file:str, out_file:str):
             obj["type_str"] = "invalid_answer"
         total_legal += 1 if obj["type_str"] == "legal" else 0
     print(f"number of invalid ans: {invalid_ans}, total legal: {total_legal} out of all: {len(data)}")
-    write_data(file=out_file, data=data)
+    # write_data(file=out_file, data=data)
     print(const_list)
     sorted_counter = sorted(const2num.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
     print(sorted_counter)
@@ -334,3 +334,11 @@ if __name__ == '__main__':
     # get_stat("data/MathQA/train.json")
     # get_stat("data/MathQA/dev.json")
     # get_stat("data/MathQA/test.json")
+
+    # x = {'1.6', '26.0', '3.1416', '3.6', '0.3937', '12.0', '0.25', '10.0', '100.0', '4.0', '1000.0', '6.0', '1.0', '5.0', '0.2778', '0.33', '3600.0', '180.0', '0.5', '60.0', '2.0', '3.0', '360.0', '52.0'}
+    # y = {'3.1416', '3.6', '12.0', '0.25', '10.0', '100.0', '4.0', '1000.0', '6.0', '1.0', '5.0', '0.2778', '3600.0', '180.0', '0.5', '60.0', '2.0', '3.0', '360.0'}
+    # z = {'3.1416', '3.6', '12.0', '0.25', '10.0', '100.0', '4.0', '1000.0', '6.0', '1.0', '5.0', '0.2778', '0.33', '3600.0', '180.0', '0.5', '60.0', '2.0', '3.0', '360.0', '52.0'}
+    # x.update(y)
+    # x.update(z)
+    # print(x)
+    # print(len(x))

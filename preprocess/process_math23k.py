@@ -1,4 +1,4 @@
-
+import random
 
 from src.utils import read_data, write_data
 from typing import List, Dict
@@ -227,8 +227,35 @@ def main():
         for key in count:
             print(f"{key}, valid number: {count[key]}, total: {len(data)}, %: {count[key] * 1.0 / len(data) * 100:.2f}")
 
+def get_five_folds():
+    random.seed(42)
+    import os
+    all_data = []
+    for in_file in ["train23k_processed_nodup.json", "valid23k_processed_nodup.json", "test23k_processed_nodup.json"]:
+        print(f"working on... {in_file}")
+        in_file = f"../data/math23k/{in_file}"
+        all_data.append(read_data(in_file))
+    all_data = all_data[0] + all_data[1] + all_data[2]
+    random.shuffle(all_data)
+    num_fold = 5
+    fold_size = len(all_data) // num_fold
+    output_folder= "math23k_five_fold"
+    os.makedirs(f"../data/math23k_five_fold", exist_ok=True)
+    for i in range(num_fold):
+        if i == num_fold - 1:
+            test_data = all_data[i * fold_size:]
+            train_data = all_data[:i * fold_size]
+        else:
+            test_data = all_data[i * fold_size:(i + 1) * fold_size]
+            train_data = all_data[:i * fold_size] + all_data[(i + 1) * fold_size:]
+        size = len(train_data) + len(test_data)
+        print(f"total size : {size}, train: {len(train_data)}, test: {len(test_data)}")
+        write_data(file=f"../data/{output_folder}/train_{i}.json", data=train_data)
+        write_data(file=f"../data/{output_folder}/test_{i}.json", data=test_data)
+
 if __name__ == '__main__':
     # text = "a () * c"
     # print(re.sub(r"\(.*\)", "temp_m", text))
-    main()
+    # main()
+    get_five_folds()
     # print(breakit('(((a+b)+a)+c)'))

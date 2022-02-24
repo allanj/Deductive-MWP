@@ -22,8 +22,8 @@ from transformers import set_seed
 from accelerate import Accelerator
 from accelerate.utils import pad_across_processes
 from accelerate import DistributedDataParallelKwargs
-# ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-accelerator = Accelerator()
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -176,7 +176,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
 def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.FloatTensor, constant_num: int, add_replacement: bool = False):
     batch_size, max_num_variable = feature.variable_indexs_start.size()
     device = feature.variable_indexs_start.device
-    batched_prediction = [[] for _ in range(batch_size)]
+    batched_predictions = []
     for k, logits in enumerate(all_logits):
         current_max_num_variable = max_num_variable + constant_num + k
         num_var_range = torch.arange(0, current_max_num_variable, device=feature.variable_indexs_start.device)
@@ -193,14 +193,16 @@ def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.Float
         # batch_size x 2
         best_comb_var_idxs = torch.gather(combination.unsqueeze(0).expand(batch_size, num_combinations, 2), 1,
                                           best_comb.unsqueeze(1).unsqueeze(2).expand(batch_size, 1, 2).to(device)).squeeze(1)
-        best_comb_var_idxs = best_comb_var_idxs.cpu().numpy()
-        best_labels = best_label.cpu().numpy()
-        curr_best_stop_labels = best_stop_label.cpu().numpy()
-        for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)):  ## within each instances:
-            left, right = best_comb_idx
-            curr_label = [left, right, best_label, stop_label]
-            batched_prediction[b_idx].append(curr_label)
-    return batched_prediction
+        # batched_prediction[:,k, :] = torch.cat([best_comb_var_idxs, best_label.unsqueeze(-1), best_stop_label.unsqueeze(-1)], dim=-1)
+        batched_predictions.append(torch.cat([best_comb_var_idxs, best_label.unsqueeze(-1), best_stop_label.unsqueeze(-1)], dim=-1))
+        # best_comb_var_idxs = best_comb_var_idxs.cpu().numpy() ## batch_size x 2
+        # best_labels = best_label.cpu().numpy() ## batch_size
+        # curr_best_stop_labels = best_stop_label.cpu().numpy() ## batch_size
+        # for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)):  ## within each instances:
+        #     left, right = best_comb_idx
+        #     curr_label = [left.item(), right.item(), best_label.item(), stop_label.item()]
+        #     batched_prediction[b_idx].append(curr_label)
+    return torch.stack(batched_predictions, dim=1)
 
 
 def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num: int, add_replacement: bool = False):
@@ -231,11 +233,12 @@ def get_batched_prediction(feature, all_logits: torch.FloatTensor, constant_num:
         for b_idx, (best_comb_idx, best_label, stop_label) in enumerate(
                 zip(best_comb_var_idxs, best_labels, curr_best_stop_labels)):  ## within each instances:
             if isinstance(best_comb_idx, np.int64):
-                right = best_comb_idx
+                right = best_comb_idx.item()
                 left = -1
             else:
                 left, right = best_comb_idx
-            curr_label = [left, right, best_label, stop_label]
+                left, right = left.item(), right.item()
+            curr_label = [left, right, best_label.item(), stop_label.item()]
             batched_prediction[b_idx].append(curr_label)
     return batched_prediction
 
@@ -253,7 +256,8 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                     if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
 
                 batched_prediction = accelerator.gather(batched_prediction)
-                batched_labels = accelerator.gather(feature.labels)
+                batched_labels = accelerator.pad_across_processes(feature.labels, dim=1, pad_index=-100)
+                batched_labels = accelerator.gather(batched_labels)
 
                 ## post process remve extra padding step
                 for b, inst_predictions in enumerate(batched_prediction):
