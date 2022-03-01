@@ -260,6 +260,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                 batched_labels = accelerator.gather(batched_labels)
 
                 ## post process remve extra padding step
+                batched_prediction = batched_prediction.cpu().numpy().tolist()
                 for b, inst_predictions in enumerate(batched_prediction):
                     for p, prediction_step in enumerate(inst_predictions):
                         left, right, op_id, stop_id = prediction_step
@@ -276,6 +277,13 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
 
                 predictions.extend(batched_prediction)
                 labels.extend(batched_labels)
+    ## need to remove additional instances that are added by accelerator
+    ## because of distributed training
+    total_instance_num = len(valid_dataloader.dataset)
+    logger.info(f"before removed: {len(predictions)}, after removed: {total_instance_num}")
+    predictions = predictions[:total_instance_num]
+    labels = labels[:total_instance_num]
+    ##
     corr = 0
     num_label_step_corr = Counter()
     num_label_step_total = Counter()
