@@ -275,7 +275,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                                  variable_indexs_end=feature.variable_indexs_end.to(dev),
                                  num_variables = feature.num_variables.to(dev),
                                  variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
+                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev), num_val=feature.num_val.to(dev),
                                  return_dict=True, is_eval=True).all_logits
                     batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
                         if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
@@ -348,7 +348,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         inst['pred_ground_equation'] = pred_ground_equation
         inst['gold_ground_equation'] = gold_ground_equation
     val_acc = val_corr * 1.0 / adjusted_total
-    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
+    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {val_corr}, adjusted_total: {adjusted_total}")
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
         curr_val_corr = num_label_step_val_corr[key]
