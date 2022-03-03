@@ -40,23 +40,6 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
     return batched_comb_mask[:,:, 0] * batched_comb_mask[:,:, 1]
 
 
-def get_negative_mask(combination: torch.Tensor, num_val: torch.Tensor, num_labels: int):
-    """
-    :param combination: (num_combinations, 2)
-    :param num_val: batch_size x max_num_var
-    :return:
-    """
-
-    batch_size = num_val.size()[0]
-    num_comb, _ = combination.size()
-    mask = torch.ones((batch_size, num_comb, num_labels), dtype=torch.long, device=combination.device)
-    left_num = torch.gather(num_val, 1, combination[:, 0].unsqueeze(0).expand(batch_size, num_comb))
-    right_num = torch.gather(num_val, 1, combination[:, 1].unsqueeze(0).expand(batch_size, num_comb))
-    mask[:, :, 1] =  1 - torch.lt(left_num, right_num).long() ## because ["+", "-", "-rev"  ] so if greater or equal
-    mask[:, :, 2] = torch.lt(left_num, right_num).long()
-
-    return mask ## 1 means pass, 0 means not pass
-
 class UniversalModel_Roberta(RobertaPreTrainedModel):
 
     def __init__(self, config: RobertaConfig,
@@ -150,8 +133,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        is_eval=False,
-        num_val = None,
+        is_eval=False
     ):
         r"""
                 labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
@@ -215,9 +197,6 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables,
                                                                 combination=combination)  # batch_size, num_combinations
 
-                ## batch_size x num_combinations x num_labels
-                negative_mask = get_negative_mask(combination=combination, num_val=num_val, num_labels=self.num_labels)
-
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1,
                                                       combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size,
                                                                                                              num_combinations * 2,
@@ -239,7 +218,6 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                                                                                                     num_combinations,
                                                                                                     self.num_labels,
                                                                                                     2).log()
-                m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
 
