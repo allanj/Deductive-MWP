@@ -325,7 +325,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         inst['pred_ground_equation'] = pred_ground_equation
         inst['gold_ground_equation'] = gold_ground_equation
     val_acc = val_corr * 1.0 / adjusted_total
-    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
+    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {val_corr}, adjusted_total: {adjusted_total}")
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
         curr_val_corr = num_label_step_val_corr[key]
@@ -367,6 +367,8 @@ def main():
     conf.uni_labels = uni_labels
     if conf.use_constant:
         if "23k" in conf.train_file:
+            conf.uni_labels = conf.uni_labels + ['^', '^_rev']
+            num_labels = len(conf.uni_labels)
             constant2id = {"1": 0, "PI": 1}
             constant_values = [1.0, 3.14]
             constant_number = len(constant_values)
