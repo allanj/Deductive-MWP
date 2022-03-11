@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-
+### Run math qa using Data Parallel
 
 use_constant=1
 add_replacement=1

@@ -26,9 +26,9 @@ for (( d=0; d<${#var_update_modes[@]}; d++  )) do
                 --train_max_height=14 \
                 --num_epochs=${epoch} \
                 --consider_multiple_m0=${consider_multiple_m0} \
-                --train_file=data/math23k/train23k_processed_nodup.json \
-                --dev_file=data/math23k/valid23k_processed_nodup.json \
-                --test_file=data/math23k/test23k_processed_nodup.json \
+                --train_file=data/math23k_train_test/combined_train23k_processed_nodup.json \
+                --dev_file=data/math23k_train_test/test23k_processed_nodup.json \
+                --test_file=none \
                 --add_replacement=${add_replacement} \
                 --train_num=-1 --dev_num=-1 \
                 --bert_folder=${bert_folder} \

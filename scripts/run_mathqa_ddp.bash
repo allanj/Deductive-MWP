@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-
+### Run MathQA using distributed data parallel
 
 use_constant=1
 add_replacement=1
