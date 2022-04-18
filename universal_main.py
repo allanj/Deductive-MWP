@@ -391,6 +391,8 @@ def main():
     if conf.use_constant:
         if "23k" in conf.train_file:
             constant2id = {"1": 0, "PI": 1}
+            conf.uni_labels = conf.uni_labels + ['^', '^_rev']
+            num_labels = len(conf.uni_labels)
             constant_values = [1.0, 3.14]
             constant_number = len(constant_values)
         elif "svamp" in conf.train_file:
@@ -404,11 +406,6 @@ def main():
             constants = ['12.0', '1.0', '7.0', '60.0', '2.0', '5.0', '100.0', '8.0', '0.1', '0.5', '0.01', '25.0', '4.0', '3.0', '0.25']
             if conf.train_file.split(".")[-2][-1] in ["0", "1", "2", "3", "4", "5"]:  ## 5 fold trainning
                 constants += ['10.0', '0.05']
-            constant2id = {c: idx for idx, c in enumerate(constants)}
-            constant_values = [float(c) for c in constants]
-            constant_number = len(constant_values)
-        elif "large_math" in conf.train_file:
-            constants = ['5.0', '10.0', '2.0', '8.0', '30.0', '1.0', '6.0', '7.0', '12.0', '4.0', '31.0', '3.14', '3.0']
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)
@@ -484,7 +481,7 @@ def main():
                                             add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0,
                                             var_update_mode=conf.var_update_mode).to(conf.device)
         logger.info("[Data Info] Reading test data")
-        eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
+        eval_dataset = UniversalDataset(file=conf.test_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                                         use_incremental_labeling=bool(conf.consider_multiple_m0), data_max_height=conf.height, pretrained_model_name=bert_model_name)
         valid_dataloader = DataLoader(eval_dataset, batch_size=conf.batch_size, shuffle=False, num_workers=0,

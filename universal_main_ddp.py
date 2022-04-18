@@ -469,10 +469,10 @@ def main():
         os.makedirs("results", exist_ok=True)
         res_file= f"results/{conf.model_folder}.res.json"
         err_file = f"results/{conf.model_folder}.err.json"
+        valid_dataloader, model = accelerator.prepare(valid_dataloader, model)
         evaluate(valid_dataloader, model, conf.device, uni_labels=conf.uni_labels, fp16=bool(conf.fp16), constant_values=constant_values, add_replacement=bool(conf.add_replacement),
                  consider_multiple_m0=bool(conf.consider_multiple_m0), res_file=res_file, err_file=err_file)
 
 if __name__ == "__main__":
-    # logger.addHandler(logging.StreamHandler())
     main()
 

@@ -61,7 +61,7 @@ class UniversalModel(BertPreTrainedModel):
         """
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6
-        assert self.num_labels == 6
+        assert self.num_labels == 6 or self.num_labels == 8
         self.config = config
 
         self.bert = BertModel(config)

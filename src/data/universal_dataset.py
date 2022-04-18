@@ -56,42 +56,7 @@ class UniversalDataset(Dataset):
         self.uni_labels = uni_labels
         self.quant_list = class_name_2_quant_list[pretrained_model_name]
         filtered_steps = [int(v) for v in filtered_steps] if filtered_steps is not None else None
-        if file is not None:
-            self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
-        else:
-            self._features = []
-            self.insts = []
-            for sent, num_list in test_strings:
-                for k in range(ord('a'), ord('a') + 26):
-                    sent = sent.replace(f"temp_{chr(k)}", " <quant> ")
-                res = tokenizer.encode_plus(" " + sent, add_special_tokens=True, return_attention_mask=True)
-
-                input_ids = res["input_ids"]
-                attention_mask = res["attention_mask"]
-                tokens = tokenizer.convert_ids_to_tokens(input_ids)
-                var_starts = []
-                var_ends = []
-                quant_num = len(self.quant_list)
-                for k, token in enumerate(tokens):
-                    if (token == self.quant_list[0]) and tokens[k:k + quant_num] == self.quant_list:
-                        var_starts.append(k)
-                        var_ends.append(k + quant_num - 1)
-                num_variable = len(var_starts)
-                var_mask = [1] * len(var_starts)
-                labels = [[-100, -100, -100, -100]]
-                label_height_mask = [0]
-                self.insts.append({"sent": sent, "num_list":num_list})
-                self._features.append(
-                    UniFeature(input_ids=input_ids,
-                               attention_mask=attention_mask,
-                               token_type_ids=[0] * len(input_ids),
-                               variable_indexs_start=var_starts,
-                               variable_indexs_end=var_ends,
-                               num_variables=num_variable,
-                               variable_index_mask=var_mask,
-                               labels=labels,
-                               label_height_mask=label_height_mask)
-                )
+        self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
 
 
     def read_math23k_file(self, file: Union[str, None],
@@ -115,12 +80,6 @@ class UniversalDataset(Dataset):
         found_duplication_inst_num = 0
         filter_step_count = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
-            if obj['type_str'] != "legal" and obj['type_str'] != "variable more than 7":
-                if "^" in self.uni_labels and obj["type_str"] == "have square":
-                    pass
-                else:
-                    filter_type_count[obj["type_str"]] += 1
-                    continue
             mapped_text = obj["text"]
             sent_len = len(mapped_text.split())
             ## replace the variable with <quant>

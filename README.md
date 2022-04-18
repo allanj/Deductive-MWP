@@ -3,7 +3,7 @@
 ### Requirements
 * transformers `pip3 install transformers`
 * Pytorch > 1.7.1
-* accelerate package `pip3 install accelerate`
+* accelerate package `pip3 install accelerate` (for distributed training)
 
 
 ### Usage
