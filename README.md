@@ -1,4 +1,7 @@
-## Math Solving 
+## Deductive Reasoning for Math Word Problem Solving 
+
+This is the offcial repo for the ACL-2022 paper "[Learning to Reason Deductively: Math Word Problem Solving as Complex Relation Extraction](https://arxiv.org/abs/2203.10316)".
+
 
 ### Requirements
 * transformers `pip3 install transformers`
