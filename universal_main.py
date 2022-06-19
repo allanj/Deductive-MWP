@@ -30,6 +30,7 @@ logging.basicConfig(
 
 class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
+        "tbs17/MathBERT": UniversalModel_Bert,
         "roberta-base": UniversalModel_Roberta,
         "bert-base-multilingual-cased": UniversalModel_Bert,
         'bert-base-chinese': UniversalModel,
@@ -369,6 +370,7 @@ def main():
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" or conf.bert_folder=="none" else f"{conf.bert_folder}/{conf.bert_model_name}"
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
+        "tbs17/MathBERT": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
         "bert-base-multilingual-cased": BertTokenizerFast,
         "xlm-roberta-base": XLMRobertaTokenizerFast,

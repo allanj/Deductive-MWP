@@ -28,6 +28,7 @@ class_name_2_quant_list = {
     'bert-base-chinese': ['<', 'q', '##uan', '##t', '>'],
     'hfl/chinese-bert-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
     'hfl/chinese-roberta-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
+    'tbs17/MathBERT': [ '<', 'quan', '##t', '>']
 }
 
 UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
@@ -471,7 +472,7 @@ def main_for_svamp():
     # constants = ['0.01', '12.0', '1.0', '100.0', '0.1', '0.5', '3.0', '4.0', '7.0']
     constant2id = {c: idx for idx, c in enumerate(constants)}
     constant_values = [float(c) for c in constants]
-    pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
+    pretrained_language_moel = 'tbs17/MathBERT' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
     tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
     UniversalDataset(file="../../data/mawps_asdiv-a_svamp/testset_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
                      constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
@@ -542,16 +543,17 @@ if __name__ == '__main__':
     use_incremental_labeling = True
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
+        "tbs17/MathBERT": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
         "bert-base-multilingual-cased": BertTokenizerFast,
         "xlm-roberta-base": XLMRobertaTokenizerFast,
         'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
         'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
     }
-    # main_for_svamp()
+    main_for_svamp()
     # main_for_mawps()
     # main_for_mathqa()
-    main_for_math23k()
+    # main_for_math23k()
 
 
 
