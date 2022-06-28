@@ -335,7 +335,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
     val_corr = 0
     num_label_step_val_corr = Counter()
     err = []
-    corr += 0
+    corr = 0
     for inst_predictions, inst_labels, inst in zip(predictions, labels, insts):
         num_list = inst["num_list"]
         is_value_corr, predict_value, gold_value, pred_ground_equation, gold_ground_equation = is_value_correct(inst_predictions, inst_labels, num_list, num_constant=constant_num, uni_labels=uni_labels, constant_values=constant_values, consider_multiple_m0=consider_multiple_m0)
