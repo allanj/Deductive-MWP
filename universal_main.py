@@ -372,6 +372,8 @@ def main():
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
+        "roberta-large": RobertaTokenizerFast,
+        "coref-roberta-base": RobertaTokenizerFast,
         "bert-base-multilingual-cased": BertTokenizerFast,
         "xlm-roberta-base": XLMRobertaTokenizerFast,
         'bert-base-chinese': BertTokenizerFast,
