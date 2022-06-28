@@ -31,6 +31,8 @@ logging.basicConfig(
 class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
         "roberta-base": UniversalModel_Roberta,
+        "roberta-large": UniversalModel_Roberta,
+        "coref-roberta-base": UniversalModel_Roberta,
         "bert-base-multilingual-cased": UniversalModel_Bert,
         'bert-base-chinese': UniversalModel,
         "xlm-roberta-base": UniversalModel_XLMRoberta,

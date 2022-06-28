@@ -23,6 +23,8 @@ logger.setLevel(logging.INFO)
 class_name_2_quant_list = {
     "bert-base-cased": ['<', 'q', '##uant', '>'],
     "roberta-base": ['Ġ<', 'quant', '>'],
+    "coref-roberta-base": ['Ġ<', 'quant', '>'],
+    "roberta-large": ['Ġ<', 'quant', '>'],
     "bert-base-multilingual-cased": ['<', 'quant', '>'],
     "xlm-roberta-base": ['▁<', 'quant', '>'],
     'bert-base-chinese': ['<', 'q', '##uan', '##t', '>'],
