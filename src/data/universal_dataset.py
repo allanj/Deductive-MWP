@@ -15,7 +15,7 @@ import math
 from typing import Dict, List
 from collections import Counter
 import logging
-
+import truecase
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -82,6 +82,9 @@ class UniversalDataset(Dataset):
         filter_step_count = 0
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             mapped_text = obj["text"]
+            if "svamp" in file:
+                mapped_text = truecase.get_true_case(mapped_text, out_of_vocabulary_token_option="as-is")
+                mapped_text = mapped_text.replace("Temp_", "temp_")
             sent_len = len(mapped_text.split())
             ## replace the variable with <quant>
             for k in range(ord('a'), ord('a') + 26):
