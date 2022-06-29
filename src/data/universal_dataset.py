@@ -25,6 +25,8 @@ class_name_2_quant_list = {
     "roberta-base": ['Ġ<', 'quant', '>'],
     "coref-roberta-base": ['Ġ<', 'quant', '>'],
     "roberta-large": ['Ġ<', 'quant', '>'],
+    "deberta-v3-base": ['▁<', 'quant', '>'],
+    "deberta-v3-large": ['▁<', 'quant', '>'],
     "bert-base-multilingual-cased": ['<', 'quant', '>'],
     "xlm-roberta-base": ['▁<', 'quant', '>'],
     'bert-base-chinese': ['<', 'q', '##uan', '##t', '>'],

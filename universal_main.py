@@ -1,7 +1,7 @@
 from src.data.universal_dataset import UniversalDataset
 from src.config import Config
 from torch.utils.data import DataLoader
-from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
+from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast, DebertaV2Tokenizer
 from tqdm import tqdm
 import argparse
 from src.utils import get_optimizers, write_data
@@ -12,6 +12,7 @@ import os
 import random
 from src.model.universal_model import UniversalModel
 from src.model.universal_model_roberta import UniversalModel_Roberta
+from src.model.universal_model_deberta import UniversalModel_Deberta
 from src.model.universal_model_bert import UniversalModel_Bert
 from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
 from collections import Counter
@@ -32,6 +33,8 @@ class_name_2_model = {
         "bert-base-cased": UniversalModel_Bert,
         "roberta-base": UniversalModel_Roberta,
         "roberta-large": UniversalModel_Roberta,
+        "deberta-v3-base": UniversalModel_Deberta,
+        "deberta-v3-larger": UniversalModel_Deberta,
         "coref-roberta-base": UniversalModel_Roberta,
         "bert-base-multilingual-cased": UniversalModel_Bert,
         'bert-base-chinese': UniversalModel,
@@ -373,6 +376,8 @@ def main():
         "bert-base-cased": BertTokenizerFast,
         "roberta-base": RobertaTokenizerFast,
         "roberta-large": RobertaTokenizerFast,
+        "deberta-v3-base": DebertaV2Tokenizer,
+        "deberta-v3-larger": DebertaV2Tokenizer,
         "coref-roberta-base": RobertaTokenizerFast,
         "bert-base-multilingual-cased": BertTokenizerFast,
         "xlm-roberta-base": XLMRobertaTokenizerFast,
