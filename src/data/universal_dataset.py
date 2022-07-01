@@ -34,8 +34,8 @@ class_name_2_quant_list = {
     'hfl/chinese-roberta-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
 }
 
-UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
-UniFeature.__new__.__defaults__ = (None,) * 7
+UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask num_val')
+UniFeature.__new__.__defaults__ = (None,) * 8
 
 class UniversalDataset(Dataset):
 
@@ -216,7 +216,8 @@ class UniversalDataset(Dataset):
                            num_variables=num_variable,
                            variable_index_mask=var_mask,
                            labels = labels,
-                           label_height_mask=label_height_mask)
+                           label_height_mask=label_height_mask,
+                           num_val = self.constant_values + obj['num_list'])
             )
             self.insts.append(obj)
         logger.info(f", total number instances: {len(self._features)} (before filter: {len(data)}), max num steps: {max_num_steps}")
@@ -420,6 +421,8 @@ class UniversalDataset(Dataset):
         padding_value = [-1, 0, 0, 0] if not self.use_incremental_labeling else [0,0,0,0]
         if self.use_incremental_labeling and not self.add_replacement:
             padding_value = [0, 1, 0, 0]
+        pad_num = 0
+        max_num = max([len(feature.num_val) for feature in batch])
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -434,6 +437,7 @@ class UniversalDataset(Dataset):
             labels = feature.labels + [padding_value]* padded_height ## useless, because we have height mask
             label_height_mask = feature.label_height_mask + [0] * padded_height
 
+            num_val = feature.num_val + [pad_num] * (max_num - len(feature.num_val))
 
             batch[i] = UniFeature(input_ids=np.asarray(input_ids),
                                 attention_mask=np.asarray(attn_mask),
@@ -443,7 +447,7 @@ class UniversalDataset(Dataset):
                                  num_variables=np.asarray(feature.num_variables),
                                  variable_index_mask=np.asarray(variable_index_mask),
                                  labels =np.asarray(labels),
-                                  label_height_mask=np.asarray(label_height_mask))
+                                  label_height_mask=np.asarray(label_height_mask), num_val = np.asarray(num_val))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 

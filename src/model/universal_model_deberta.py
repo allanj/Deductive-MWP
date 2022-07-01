@@ -2,7 +2,7 @@ from transformers.models.deberta_v2 import DebertaV2Model, DebertaV2PreTrainedMo
 import torch.nn as nn
 import torch
 import torch.utils.checkpoint
-from src.model.universal_model_roberta import get_combination_mask, UniversalOutput
+from src.model.universal_model_roberta import get_combination_mask, UniversalOutput, get_negative_mask
 
 
 
@@ -99,7 +99,8 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        is_eval=False
+        is_eval=False,
+        num_val = None,
     ):
         r"""
                 labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
@@ -162,6 +163,10 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables,
                                                                 combination=combination)  # batch_size, num_combinations
 
+                negative_mask = None
+                if num_val is not None:
+                    negative_mask = get_negative_mask(combination=combination, num_val=num_val, num_labels=self.num_labels)
+
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1,
                                                       combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size,
                                                                                                              num_combinations * 2,
@@ -183,6 +188,10 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                                                                                                     num_combinations,
                                                                                                     self.num_labels,
                                                                                                     2).log()
+
+                if negative_mask is not None:
+                    m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
 

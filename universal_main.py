@@ -280,7 +280,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                                  variable_indexs_end=feature.variable_indexs_end.to(dev),
                                  num_variables = feature.num_variables.to(dev),
                                  variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
+                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev), num_val = feature.num_val.to(dev),
                                  return_dict=True, is_eval=True).all_logits
                     batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
                         if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
