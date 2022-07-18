@@ -4,7 +4,7 @@
 
 
 use_constant=1
-add_replacement=0
+add_replacement=1
 consider_multiple_m0=1
 var_update_modes=(gru)
 bert_model_names=(bert-base-cased roberta-base bert-base-multilingual-cased xlm-roberta-base)
