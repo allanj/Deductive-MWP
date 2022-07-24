@@ -4,7 +4,82 @@ import torch
 import torch.utils.checkpoint
 from src.model.universal_model_roberta import get_combination_mask, UniversalOutput, get_negative_mask
 
+total_uni_labels = [
+        '+', '-', '-_rev', '*', '/', '/_rev'
+]
 
+def get_intermediate_value_mask(num_val, batched_combinations):
+    """
+    Return the mask for all the possible intermediate values.
+    Disallow negative values, infinity values and also NaN value
+    :param num_val: (batch_size, num_quantities)
+    :param b_idxs: (batch_size) from 0 to batch_size - 1
+    :param batched_combinations: (batch_size, num_combination, 2) all the possible combination at the current step
+    :return: (batch_size, num_quantities)
+
+    :return: (batch_size, num_combinations, num_labels), the mask for all possible intermediate values.
+    """
+    with torch.no_grad():
+        # get the value of the combination index: (batch_size, num_combination, 2)
+        actual_combination_value_pair = torch.gather(num_val, 2, batched_combinations)
+        # perform operations on the each combination value pair
+        left_values = actual_combination_value_pair[:, :, 0] # batch_size, num_combination
+        right_values = actual_combination_value_pair[:, :, 1] # batch_size, num_combination
+
+        addition_res = left_values + right_values ##batch_size, num_combination
+        subtraction_res = left_values - right_values ##batch_size, num_combination
+        multiplication_res = left_values * right_values #batch_size, num_combination
+        division_res = left_values / right_values
+        subtraction_reverse_res = right_values - left_values
+        division_reverse_res = right_values / left_values
+
+        # all the possible intermediate values with size (batch_size, num_combination, num_labels)
+        all_possible_values = torch.stack([addition_res, subtraction_res, subtraction_reverse_res,
+                                             multiplication_res, division_res, division_reverse_res], dim=2)
+        # Create mask for all the possible intermediate values. (batch_size, num_combination, num_labels)
+        intermediate_value_mask = torch.ones_like(all_possible_values)
+        # disallow negative values, infinity values and also NaN value
+        intermediate_value_mask[all_possible_values < 0] = 0
+        intermediate_value_mask[torch.isnan(all_possible_values)] = 0
+        intermediate_value_mask[torch.isinf(all_possible_values)] = 0
+
+    return intermediate_value_mask
+
+def compute_intermediate_values(num_val, b_idxs, batched_combinations, best_comb, best_label):
+    """
+    Return the intermediate values of the equation.
+    :param num_val: (batch_size, num_quantities)
+    :param batched_combinations: (batch_size, num_combination, 2) all the possible combination at the current step
+    :param b_idxs: (batch_size) from 0 to batch_size - 1
+    :param best_comb: (batch_size) the best combination index at the moment
+    :param best_label: (batch_size) the best label at the moment
+    :return: (batch_size, num_quantities)
+
+    :return: (batch_size), the intermediate numerical results
+    """
+    # (batch_size, num_quantities)
+    with torch.no_grad():
+        # get the best combination idx (batch_size, 2)
+        best_comb_idxs = batched_combinations[b_idxs, best_comb]
+        # get the value of the best combination index: (batch_size, 2)
+        actual_combination_value_pair = torch.gather(num_val, 1, best_comb_idxs)
+        # perform operations on the best combination value pair
+        left_values = actual_combination_value_pair[:, 0]
+        right_values = actual_combination_value_pair[:, 1]
+
+        addition_res = left_values + right_values ##batch_size
+        subtraction_res = left_values - right_values ##batch_size
+        multiplication_res = left_values * right_values #batch_size
+        division_res = left_values / right_values
+        subtraction_reverse_res = right_values - left_values
+        division_reverse_res = right_values / left_values
+
+        # intermediate results: batch_size, num_labels
+        all_possible_intermediate_values = torch.stack([addition_res, subtraction_res, subtraction_reverse_res, multiplication_res, division_res, division_reverse_res], dim=1)
+
+        # select the value from te best_label variable. (batch_size, 1)
+        intermediate_values = torch.gather(all_possible_intermediate_values, 1, best_label.unsqueeze(1))
+    return torch.cat([intermediate_values, num_val], dim=1) ## new value is put upfront
 
 class UniversalModel_Deberta(DebertaV2PreTrainedModel):
 
@@ -159,13 +234,16 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2,
                                                  with_replacement=self.add_replacement)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
+                batched_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
                 # batch_size x num_combinations. 2*6
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables,
                                                                 combination=combination)  # batch_size, num_combinations
 
                 negative_mask = None
+                intermediate_value_mask = None
                 if num_val is not None:
                     negative_mask = get_negative_mask(combination=combination, num_val=num_val, num_labels=self.num_labels)
+                    intermediate_value_mask = get_intermediate_value_mask(num_val, batched_combinations)
 
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1,
                                                       combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size,
@@ -190,6 +268,7 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                                                                                                     2).log()
 
                 if negative_mask is not None:
+                    m0_logits = m0_logits + intermediate_value_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
                     m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                 ## batch_size, num_combinations/num_m0, num_labels, 2
@@ -238,6 +317,7 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
                     best_mi_scores = m0_logits[b_idxs, best_comb, best_label][:, 0]  # batch_size
+                num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
             else:
                 if not self.consider_multiple_m0:
                     # best_mi_label_rep = self.intermediate_transformation(best_mi_label_rep)
@@ -309,8 +389,14 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                     combination = torch.combinations(num_var_range, r=2,
                                                      with_replacement=self.add_replacement)  ##number_of_combinations x 2
                     num_combinations, _ = combination.size()  # number_of_combinations x 2
+                    batched_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
                     batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i,
                                                                     combination=combination)
+
+                    intermediate_value_mask = None
+
+                    if num_val is not None:
+                        intermediate_value_mask = get_intermediate_value_mask(num_val, batched_combinations)
 
                     var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states],
                                                   dim=1)  ## batch_size x (num_var + i) x hidden_size
@@ -325,12 +411,14 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                          expanded_var_comb_hidden_states[:, :, 0, :] * expanded_var_comb_hidden_states[:, :, 1, :]],
                         dim=-1)
                     mi_label_rep = torch.stack([layer(mi_hidden_states) for layer in linear_modules], dim=2)
-                    mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, num_combinations, self.num_labels,
-                                                                          2)
+                    mi_logits = self.label_rep2label(mi_label_rep).expand(batch_size, num_combinations, self.num_labels, 2)
                     mi_logits = mi_logits + batched_combination_mask.unsqueeze(-1).unsqueeze(-1).expand(batch_size,
                                                                                                         num_combinations,
                                                                                                         self.num_labels,
                                                                                                         2).log()
+
+                    if intermediate_value_mask is not None:
+                        mi_logits = mi_logits + intermediate_value_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                     mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
                     var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
@@ -373,6 +461,7 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                         best_mi_scores = mi_logits[b_idxs, best_comb, best_label][:, 0]
+                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
 
