@@ -20,8 +20,9 @@ def get_intermediate_value_mask(num_val, batched_combinations):
     :return: (batch_size, num_combinations, num_labels), the mask for all possible intermediate values.
     """
     with torch.no_grad():
+        expanded_num_val = num_val.unsqueeze(1).expand(num_val.shape[0], batched_combinations.shape[1], num_val.shape[1])
         # get the value of the combination index: (batch_size, num_combination, 2)
-        actual_combination_value_pair = torch.gather(num_val, 2, batched_combinations)
+        actual_combination_value_pair = torch.gather(expanded_num_val, 2, batched_combinations)
         # perform operations on the each combination value pair
         left_values = actual_combination_value_pair[:, :, 0] # batch_size, num_combination
         right_values = actual_combination_value_pair[:, :, 1] # batch_size, num_combination

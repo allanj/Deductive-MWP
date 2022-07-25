@@ -146,7 +146,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                              num_variables = feature.num_variables.to(dev),
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                             num_val = feature.num_val.to(dev),
+                             # num_val = feature.num_val.to(dev),
                              return_dict=True).loss
             if config.parallel:
                 loss = loss.sum()
