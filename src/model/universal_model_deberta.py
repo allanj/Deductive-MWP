@@ -40,7 +40,7 @@ def get_intermediate_value_mask(num_val, batched_combinations):
         # Create mask for all the possible intermediate values. (batch_size, num_combination, num_labels)
         intermediate_value_mask = torch.ones_like(all_possible_values)
         # disallow negative values, infinity values and also NaN value
-        intermediate_value_mask[all_possible_values < 0] = 0
+        # intermediate_value_mask[all_possible_values < 0] = 0
         intermediate_value_mask[torch.isnan(all_possible_values)] = 0
         intermediate_value_mask[torch.isinf(all_possible_values)] = 0
 
@@ -314,11 +314,14 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
 
                     best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]]  ## teacher-forcing.
                     best_mi_scores = m0_logits[b_idxs, judge, m0_gold_labels[:, 2]][:, 0]  # batch_size
+                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                          batched_combinations=batched_combinations,
+                                                          best_comb=judge, best_label=m0_gold_labels[:, 3])
                 else:
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
                     best_mi_scores = m0_logits[b_idxs, best_comb, best_label][:, 0]  # batch_size
-                num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
+                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
             else:
                 if not self.consider_multiple_m0:
                     # best_mi_label_rep = self.intermediate_transformation(best_mi_label_rep)
@@ -459,10 +462,13 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                         loss = loss + current_loss.sum()
                         best_mi_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]]  ## teacher-forcing.
                         best_mi_scores = mi_logits[b_idxs, judge, mi_gold_labels[:, 2]][:, 0]  # batch_size
+                        num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                              batched_combinations=batched_combinations,
+                                                              best_comb=judge, best_label=mi_gold_labels[:, 3])
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                         best_mi_scores = mi_logits[b_idxs, best_comb, best_label][:, 0]
-                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
+                        num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs, batched_combinations=batched_combinations, best_comb=best_comb, best_label=best_label)
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
 
