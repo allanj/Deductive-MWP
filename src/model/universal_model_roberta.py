@@ -8,6 +8,7 @@ from transformers.modeling_outputs import (
 )
 from dataclasses import dataclass
 from typing import Optional, List
+from src.model.universal_model_deberta import get_intermediate_value_mask, compute_intermediate_values
 
 @dataclass
 class UniversalOutput(ModelOutput):
@@ -213,14 +214,19 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                 combination = torch.combinations(num_var_range, r=2,
                                                  with_replacement=self.add_replacement)  ##number_of_combinations x 2
                 num_combinations, _ = combination.size()  # number_of_combinations x 2
+                batched_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
                 # batch_size x num_combinations. 2*6
                 batched_combination_mask = get_combination_mask(batched_num_variables=num_variables,
                                                                 combination=combination)  # batch_size, num_combinations
 
                 ## batch_size x num_combinations x num_labels
                 negative_mask = None
-                if num_val is not None:
+                intermediate_value_mask = None
+                if num_val is not None and is_eval:
                     negative_mask = get_negative_mask(combination=combination, num_val=num_val, num_labels=self.num_labels)
+                if num_val is not None:
+                    intermediate_value_mask = get_intermediate_value_mask(num_val, batched_combinations)
+
 
                 var_comb_hidden_states = torch.gather(var_hidden_states, 1,
                                                       combination.view(-1).unsqueeze(0).unsqueeze(-1).expand(batch_size,
@@ -243,8 +249,11 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                                                                                                     num_combinations,
                                                                                                     self.num_labels,
                                                                                                     2).log()
-                if negative_mask is not None:
+                if negative_mask is not None and is_eval:
                     m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                if intermediate_value_mask is not None:
+                    m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
 
@@ -287,10 +296,16 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
 
                     best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]]  ## teacher-forcing.
                     best_mi_scores = m0_logits[b_idxs, judge, m0_gold_labels[:, 2]][:, 0]  # batch_size
+                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                          batched_combinations=batched_combinations,
+                                                          best_comb=judge, best_label=m0_gold_labels[:, 3])
                 else:
                     best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                     best_mi_label_rep = best_m0_label_rep
                     best_mi_scores = m0_logits[b_idxs, best_comb, best_label][:, 0]  # batch_size
+                    num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                          batched_combinations=batched_combinations,
+                                                          best_comb=best_comb, best_label=best_label)
             else:
                 if not self.consider_multiple_m0:
                     # best_mi_label_rep = self.intermediate_transformation(best_mi_label_rep)
@@ -362,8 +377,13 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                     combination = torch.combinations(num_var_range, r=2,
                                                      with_replacement=self.add_replacement)  ##number_of_combinations x 2
                     num_combinations, _ = combination.size()  # number_of_combinations x 2
+                    batched_combinations = combination.unsqueeze(0).expand(batch_size, num_combinations, 2)
                     batched_combination_mask = get_combination_mask(batched_num_variables=num_variables + i,
                                                                     combination=combination)
+
+                    intermediate_value_mask = None
+                    if num_val is not None:
+                        intermediate_value_mask = get_intermediate_value_mask(num_val, batched_combinations, disallow_negative=is_eval)
 
                     var_hidden_states = torch.cat([best_mi_label_rep.unsqueeze(1), var_hidden_states],
                                                   dim=1)  ## batch_size x (num_var + i) x hidden_size
@@ -384,6 +404,8 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                                                                                                         num_combinations,
                                                                                                         self.num_labels,
                                                                                                         2).log()
+                    if intermediate_value_mask is not None:
+                        mi_logits = mi_logits + intermediate_value_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                     mi_stopper_logits = self.stopper(self.stopper_transformation(mi_label_rep))
                     var_scores = self.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
@@ -423,9 +445,15 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                         loss = loss + current_loss.sum()
                         best_mi_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]]  ## teacher-forcing.
                         best_mi_scores = mi_logits[b_idxs, judge, mi_gold_labels[:, 2]][:, 0]  # batch_size
+                        num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                              batched_combinations=batched_combinations,
+                                                              best_comb=judge, best_label=mi_gold_labels[:, 3])
                     else:
                         best_mi_label_rep = mi_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                         best_mi_scores = mi_logits[b_idxs, best_comb, best_label][:, 0]
+                        num_val = compute_intermediate_values(num_val=num_val, b_idxs=b_idxs,
+                                                              batched_combinations=batched_combinations,
+                                                              best_comb=best_comb, best_label=best_label)
 
         return UniversalOutput(loss=loss, all_logits=all_logits)
 
@@ -504,7 +532,7 @@ def test_case_batch_two_mutiple_m0():
     random.seed(42)
     np.random.seed(42)
     torch.manual_seed(42)
-    model = UniversalModel.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=0, add_replacement=True, height=4, consider_multiple_m0=True)
+    model = UniversalModel_Roberta.from_pretrained('hfl/chinese-roberta-wwm-ext', num_labels=6, constant_num=0, add_replacement=True, height=4, consider_multiple_m0=True)
     model.eval()
     from transformers import BertTokenizer
     tokenizer = BertTokenizer.from_pretrained('hfl/chinese-roberta-wwm-ext')

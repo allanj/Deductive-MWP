@@ -8,7 +8,7 @@ total_uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
 ]
 
-def get_intermediate_value_mask(num_val, batched_combinations):
+def get_intermediate_value_mask(num_val, batched_combinations, disallow_negative=False):
     """
     Return the mask for all the possible intermediate values.
     Disallow negative values, infinity values and also NaN value
@@ -40,6 +40,8 @@ def get_intermediate_value_mask(num_val, batched_combinations):
         # Create mask for all the possible intermediate values. (batch_size, num_combination, num_labels)
         intermediate_value_mask = torch.ones_like(all_possible_values)
         # disallow negative values, infinity values and also NaN value
+        if disallow_negative:
+            intermediate_value_mask[all_possible_values < 0] = 0
         # intermediate_value_mask[all_possible_values < 0] = 0
         intermediate_value_mask[torch.isnan(all_possible_values)] = 0
         intermediate_value_mask[torch.isinf(all_possible_values)] = 0
@@ -398,7 +400,6 @@ class UniversalModel_Deberta(DebertaV2PreTrainedModel):
                                                                     combination=combination)
 
                     intermediate_value_mask = None
-
                     if num_val is not None:
                         intermediate_value_mask = get_intermediate_value_mask(num_val, batched_combinations)
 
