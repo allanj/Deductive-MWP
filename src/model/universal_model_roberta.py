@@ -328,7 +328,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                 if negative_mask is not None and is_eval:
                     m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
                 if intermediate_value_mask is not None:
-                    m0_logits = m0_logits + negative_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
+                    m0_logits = m0_logits + intermediate_value_mask.unsqueeze(-1).expand(batch_size, num_combinations, self.num_labels, 2).log()
 
                 ## batch_size, num_combinations/num_m0, num_labels, 2
                 m0_stopper_logits = self.stopper(self.stopper_transformation(m0_label_rep))
