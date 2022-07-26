@@ -8,7 +8,6 @@ from transformers.modeling_outputs import (
 )
 from dataclasses import dataclass
 from typing import Optional, List
-from src.model.universal_model_deberta import get_intermediate_value_mask, compute_intermediate_values
 
 @dataclass
 class UniversalOutput(ModelOutput):
@@ -24,6 +23,83 @@ class UniversalOutput(ModelOutput):
 
     loss: Optional[torch.FloatTensor] = None
     all_logits: List[torch.FloatTensor] = None
+
+def get_intermediate_value_mask(num_val, batched_combinations, disallow_negative=False):
+    """
+    Return the mask for all the possible intermediate values.
+    Disallow negative values, infinity values and also NaN value
+    :param num_val: (batch_size, num_quantities)
+    :param b_idxs: (batch_size) from 0 to batch_size - 1
+    :param batched_combinations: (batch_size, num_combination, 2) all the possible combination at the current step
+    :return: (batch_size, num_quantities)
+
+    :return: (batch_size, num_combinations, num_labels), the mask for all possible intermediate values.
+    """
+    with torch.no_grad():
+        expanded_num_val = num_val.unsqueeze(1).expand(num_val.shape[0], batched_combinations.shape[1], num_val.shape[1])
+        # get the value of the combination index: (batch_size, num_combination, 2)
+        actual_combination_value_pair = torch.gather(expanded_num_val, 2, batched_combinations)
+        # perform operations on the each combination value pair
+        left_values = actual_combination_value_pair[:, :, 0] # batch_size, num_combination
+        right_values = actual_combination_value_pair[:, :, 1] # batch_size, num_combination
+
+        addition_res = left_values + right_values ##batch_size, num_combination
+        subtraction_res = left_values - right_values ##batch_size, num_combination
+        multiplication_res = left_values * right_values #batch_size, num_combination
+        division_res = left_values / right_values
+        subtraction_reverse_res = right_values - left_values
+        division_reverse_res = right_values / left_values
+
+        # all the possible intermediate values with size (batch_size, num_combination, num_labels)
+        all_possible_values = torch.stack([addition_res, subtraction_res, subtraction_reverse_res,
+                                             multiplication_res, division_res, division_reverse_res], dim=2)
+        # Create mask for all the possible intermediate values. (batch_size, num_combination, num_labels)
+        intermediate_value_mask = torch.ones_like(all_possible_values)
+        # disallow negative values, infinity values and also NaN value
+        if disallow_negative:
+            intermediate_value_mask[all_possible_values < 0] = 0
+        # intermediate_value_mask[all_possible_values < 0] = 0
+        intermediate_value_mask[torch.isnan(all_possible_values)] = 0
+        intermediate_value_mask[torch.isinf(all_possible_values)] = 0
+
+    return intermediate_value_mask
+
+def compute_intermediate_values(num_val, b_idxs, batched_combinations, best_comb, best_label):
+    """
+    Return the intermediate values of the equation.
+    :param num_val: (batch_size, num_quantities)
+    :param batched_combinations: (batch_size, num_combination, 2) all the possible combination at the current step
+    :param b_idxs: (batch_size) from 0 to batch_size - 1
+    :param best_comb: (batch_size) the best combination index at the moment
+    :param best_label: (batch_size) the best label at the moment
+    :return: (batch_size, num_quantities)
+
+    :return: (batch_size), the intermediate numerical results
+    """
+    # (batch_size, num_quantities)
+    with torch.no_grad():
+        # get the best combination idx (batch_size, 2)
+        best_comb_idxs = batched_combinations[b_idxs, best_comb]
+        # get the value of the best combination index: (batch_size, 2)
+        actual_combination_value_pair = torch.gather(num_val, 1, best_comb_idxs)
+        # perform operations on the best combination value pair
+        left_values = actual_combination_value_pair[:, 0]
+        right_values = actual_combination_value_pair[:, 1]
+
+        addition_res = left_values + right_values ##batch_size
+        subtraction_res = left_values - right_values ##batch_size
+        multiplication_res = left_values * right_values #batch_size
+        division_res = left_values / right_values
+        subtraction_reverse_res = right_values - left_values
+        division_reverse_res = right_values / left_values
+
+        # intermediate results: batch_size, num_labels
+        all_possible_intermediate_values = torch.stack([addition_res, subtraction_res, subtraction_reverse_res, multiplication_res, division_res, division_reverse_res], dim=1)
+
+        # select the value from te best_label variable. (batch_size, 1)
+        intermediate_values = torch.gather(all_possible_intermediate_values, 1, best_label.unsqueeze(1))
+    return torch.cat([intermediate_values, num_val], dim=1) ## new value is put upfront
+
 
 def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch.Tensor):
     """
