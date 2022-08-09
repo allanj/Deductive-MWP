@@ -28,7 +28,9 @@ We do not provide the 5-fold model checkpoints due to space limitation.
  |              MathQA              | [Link](https://drive.google.com/file/d/1hgqSZwMyFearr_RJebL51ROflqwdsZUv/view?usp=sharing) | 
 |              SVAMP               | [Link](https://drive.google.com/file/d/1ykI_pTPiCrHhgVA1gVN-yZeB-e0-J0TK/view?usp=sharing)  | 
 
-### Results
+### Datasets
+
+The data for Math23k Five-fold is not uploaded to GitHub due to slightly larger dataset size, it is uploaded here in Google Drive: https://drive.google.com/file/d/1oQZUPeIA6TlNySqjcZhTMQA4-onwljTU/view?usp=sharing
 
 
 ## TODO
@@ -37,10 +39,11 @@ We do not provide the 5-fold model checkpoints due to space limitation.
 ### Citation
 If you find this work useful, please cite our paper:
 ```
-@InProceedings{jie2022math, 
-    author = "Jie, Zhanming and Li, Jierui and Lu, Wei", 
-    title = "Learning to Reason Deductively: Math Word Problem Solving as Complex Relation Extraction", 
-    booktitle = "Proceedings of ACL", 
-    year = "2022"
+@inproceedings{jie2022learning,
+  title={Learning to Reason Deductively: Math Word Problem Solving as Complex Relation Extraction},
+  author={Jie, Zhanming and Li, Jierui and Lu, Wei},
+  booktitle={Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages={5944--5955},
+  year={2022}
 }
 ```
