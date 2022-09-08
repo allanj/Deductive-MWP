@@ -367,7 +367,7 @@ def main():
     opt = parse_arguments(parser)
     set_seed(opt.seed)
     conf = Config(opt)
-
+    os.makedirs("results", exist_ok=True)
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" or conf.bert_folder=="none" else f"{conf.bert_folder}/{conf.bert_model_name}"
     class_name_2_tokenizer = {
         "bert-base-cased": BertTokenizerFast,
