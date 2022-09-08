@@ -131,7 +131,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     best_val_acc_performance = -1
     os.makedirs(f"model_files/{config.model_folder}", exist_ok=True)
 
-    model, optimizer, train_dataloader, valid_dataloader = accelerator.prepare(model, optimizer, train_dataloader, valid_dataloader)
+    model, optimizer, train_dataloader, valid_dataloader, scheduler = accelerator.prepare(model, optimizer, train_dataloader, valid_dataloader, scheduler)
     if test_dataloader is not None:
         test_dataloader = accelerator.prepare(test_dataloader)
 
@@ -255,9 +255,9 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
                 batched_prediction = get_batched_prediction(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement) \
                     if not consider_multiple_m0 else get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num, add_replacement=add_replacement)
 
-                batched_prediction = accelerator.gather(batched_prediction)
+                batched_prediction = accelerator.gather_for_metrics(batched_prediction)
                 batched_labels = accelerator.pad_across_processes(feature.labels, dim=1, pad_index=-100)
-                batched_labels = accelerator.gather(batched_labels)
+                batched_labels = accelerator.gather_for_metrics(batched_labels)
 
                 ## post process remve extra padding step
                 batched_prediction = batched_prediction.cpu().numpy().tolist()
