@@ -15,7 +15,7 @@ for (( d=0; d<${#var_update_modes[@]}; d++  )) do
         bert_model_name=${bert_model_names[$e]}
         bert_folder=${bert_folders[$e]}
         dev=${cuda_devices[$e]}
-        model_folder=math23k_${bert_model_name}_${var_update_mode}_${epoch}
+        model_folder=math23k_train_test_${bert_model_name}_${var_update_mode}_${epoch}
         echo "Running mawps with bert model $bert_model_name and var update mode $var_update_mode"
         TOKENIZERS_PARALLELISM=false \
         python3 universal_main.py \
