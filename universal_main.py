@@ -10,10 +10,7 @@ import torch.nn as nn
 import numpy as np
 import os
 import random
-from src.model.universal_model import UniversalModel
-from src.model.universal_model_roberta import UniversalModel_Roberta
-from src.model.universal_model_bert import UniversalModel_Bert
-from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
+from src.model.universal_model import UniversalModel, UniversalModel_Roberta
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List, Tuple
@@ -29,13 +26,13 @@ logging.basicConfig(
 )
 
 class_name_2_model = {
-        "bert-base-cased": UniversalModel_Bert,
+        "bert-base-cased": UniversalModel,
         "roberta-base": UniversalModel_Roberta,
         "roberta-large": UniversalModel_Roberta,
         "coref-roberta-base": UniversalModel_Roberta,
-        "bert-base-multilingual-cased": UniversalModel_Bert,
+        "bert-base-multilingual-cased": UniversalModel,
         'bert-base-chinese': UniversalModel,
-        "xlm-roberta-base": UniversalModel_XLMRoberta,
+        "xlm-roberta-base": UniversalModel_Roberta,
         'hfl/chinese-bert-wwm-ext': UniversalModel,
         'hfl/chinese-roberta-wwm-ext': UniversalModel,
     }
@@ -386,7 +383,6 @@ def main():
             constant_values = [1.0, 3.14]
             constant_number = len(constant_values)
         elif "svamp" in conf.train_file:
-            # ['0.01', '12.0', '1.0', '100.0', '0.1', '0.5', '3.0', '4.0', '7.0']
             constants = ['1.0', '0.1', '3.0', '5.0', '0.5', '12.0', '4.0', '60.0', '25.0', '0.01', '0.05', '2.0',
                          '10.0', '0.25', '8.0', '7.0', '100.0']
             constant2id = {c: idx for idx, c in enumerate(constants)}
@@ -403,7 +399,6 @@ def main():
             constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416', '3.6', '0.25', '5.0', '6.0', '360.0', '52.0', '180.0']
             conf.uni_labels = conf.uni_labels + ['^', '^_rev']
             num_labels = len(conf.uni_labels)
-            # constants = ['100.0', '1.0', '2.0', '3.0', '4.0', '10.0', '1000.0', '60.0', '0.5', '3600.0', '12.0', '0.2778', '3.1416']
             constant2id = {c: idx for idx, c in enumerate(constants)}
             constant_values = [float(c) for c in constants]
             constant_number = len(constant_values)

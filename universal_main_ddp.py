@@ -10,10 +10,7 @@ import torch.nn as nn
 import numpy as np
 import os
 import random
-from src.model.universal_model import UniversalModel
-from src.model.universal_model_roberta import UniversalModel_Roberta
-from src.model.universal_model_bert import UniversalModel_Bert
-from src.model.universal_model_xlmroberta import UniversalModel_XLMRoberta
+from src.model.universal_model import UniversalModel, UniversalModel_Roberta
 from collections import Counter
 from src.eval.utils import is_value_correct
 from typing import List, Tuple
@@ -37,11 +34,11 @@ else:
     logger.setLevel(logging.WARNING)
 
 class_name_2_model = {
-        "bert-base-cased": UniversalModel_Bert,
+        "bert-base-cased": UniversalModel,
         "roberta-base": UniversalModel_Roberta,
-        "bert-base-multilingual-cased": UniversalModel_Bert,
+        "bert-base-multilingual-cased": UniversalModel,
         'bert-base-chinese': UniversalModel,
-        "xlm-roberta-base": UniversalModel_XLMRoberta,
+        "xlm-roberta-base": UniversalModel_Roberta,
         'hfl/chinese-bert-wwm-ext': UniversalModel,
         'hfl/chinese-roberta-wwm-ext': UniversalModel,
     }
