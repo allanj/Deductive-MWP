@@ -13,10 +13,29 @@ This is the offcial repo for the ACL-2022 paper "[Learning to Reason Deductively
 
 Reproduce the results, simply run our scripts under `scripts` folder.
 
-For example, reproduce the results for `Math23k` dataset,
+#### Math23k
+For example, reproduce the results for `Math23k` dataset with train/val/test setting,
 ```shell
 bash scripts/run_math23k.sh
 ```
+Run the following for the train/test setting
+```shell
+bash scripts/run_math23k_train_test.sh
+```
+
+### Main Results
+We reproduce the main results of **Roberta-base-DeductiveReasoner** in the following table.
+
+| Dataset                  | Value Accuracy | 
+|:-------------------------|:--------------:|
+| Math23k (train/val/test) |      84.3      | 
+| Math23k (train/test)     |      86.0      |
+| MAWPS (5-fold CV)        |      92.0      | 
+| MathQA (train/val/test)  |      78.6      |
+| SVAMP                    |48.9|
+
+More details can be found in Appendix C in our paper. 
+
 
 ### Checkpoints
 We also provide the **Roberta-base-DeductiveReasoner** checkpoints that we have trained on the Math23k, MathQA and SVAMP datasets.
@@ -24,17 +43,16 @@ We do not provide the 5-fold model checkpoints due to space limitation.
 
 |             Dataset              | Link  | 
 |:--------------------------------:|---|
- | Math23k (train/dev/test setting) | [Link](https://drive.google.com/file/d/1TAHbdCKar0gqFzOd76LIYMQyI6hPOmL0/view?usp=sharing)  | 
+ | Math23k (train/dev/test setting) | [Link](https://drive.google.com/file/d/1TAHbdCKar0gqFzOd76LIYMQyI6hPOmL0/view?usp=sharing)  |
+|   Math23k (train/test setting)   | [Link](https://huggingface.co/allanjie/math23k_train_test_roberta-base/tree/main)  |
  |              MathQA              | [Link](https://drive.google.com/file/d/1hgqSZwMyFearr_RJebL51ROflqwdsZUv/view?usp=sharing) | 
 |              SVAMP               | [Link](https://drive.google.com/file/d/1ykI_pTPiCrHhgVA1gVN-yZeB-e0-J0TK/view?usp=sharing)  | 
 
 ### Datasets
 
-The data for Math23k Five-fold is not uploaded to GitHub due to slightly larger dataset size, it is uploaded here in Google Drive: https://drive.google.com/file/d/1oQZUPeIA6TlNySqjcZhTMQA4-onwljTU/view?usp=sharing
+The data for Math23k Five-fold is not uploaded to GitHub due to slightly larger dataset size, it is uploaded [here](https://drive.google.com/file/d/1oQZUPeIA6TlNySqjcZhTMQA4-onwljTU/view?usp=sharing) in Google Drive. 
 
 
-## TODO
-- [ ] We plan to have a easier or more user-friendly way to load our pretrained model, by using the `from_pretrained` function from Hugginface. 
 
 ### Citation
 If you find this work useful, please cite our paper:

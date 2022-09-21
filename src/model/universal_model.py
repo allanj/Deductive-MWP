@@ -48,7 +48,8 @@ class UniversalModel(BertPreTrainedModel):
                  height: int = 4,
                  constant_num: int = 0,
                  add_replacement: bool = False,
-                 consider_multiple_m0: bool = False, var_update_mode: str= 'gru'):
+                 consider_multiple_m0: bool = False,
+                 var_update_mode: str= 'gru'):
         """
         Constructor for model function
         :param config:
@@ -57,7 +58,7 @@ class UniversalModel(BertPreTrainedModel):
         :param constant_num: the number of constant we consider
         :param add_replacement: only at h=0, whether we want to consider somehting like "a*a" or "a+a"
                                 also applies to h>0 when `consider_multplie_m0` = True
-        :param consider_multiple_m0: considering more m0 in one single step. for example soemthing like "m3 = m1 x m2".
+        :param consider_multiple_m0: considering more m0 in one single step. for example something like "m3 = m1 x m2".
         """
         super().__init__(config)
         self.num_labels = config.num_labels ## should be 6

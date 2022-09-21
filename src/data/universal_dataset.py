@@ -19,7 +19,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-## "<quant>" token will be split into different word pieces in different tokenizers
+## "<quant>" token will be split into different subwords in different tokenizers
 class_name_2_quant_list = {
     "bert-base-cased": ['<', 'q', '##uant', '>'],
     "roberta-base": ['Ġ<', 'quant', '>'],
@@ -46,8 +46,7 @@ class UniversalDataset(Dataset):
                  constant2id: Dict[str, int] = None,
                  constant_values: List[float] = None,
                  use_incremental_labeling: bool = False,
-                 data_max_height: int = 100,
-                 test_strings: List[str] = None) -> None:
+                 data_max_height: int = 100) -> None:
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values

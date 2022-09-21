@@ -1,7 +1,7 @@
 from src.data.universal_dataset import UniversalDataset
 from src.config import Config
 from torch.utils.data import DataLoader
-from transformers import BertTokenizerFast, PreTrainedTokenizer, RobertaTokenizerFast, XLMRobertaTokenizerFast
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 from tqdm import tqdm
 import argparse
 from src.utils import get_optimizers, write_data
@@ -107,7 +107,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
 def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
           bert_model_name: str, num_labels: int,
-          dev: torch.device, tokenizer: PreTrainedTokenizer, valid_dataloader: DataLoader = None, test_dataloader: DataLoader = None,
+          dev: torch.device, tokenizer: PreTrainedTokenizerFast, valid_dataloader: DataLoader = None, test_dataloader: DataLoader = None,
           constant_values: List = None, res_file:str = None, error_file:str = None):
 
     gradient_accumulation_steps = 1
@@ -344,20 +344,8 @@ def main():
     conf = Config(opt)
 
     bert_model_name = conf.bert_model_name if conf.bert_folder == "" or conf.bert_folder=="none" else f"{conf.bert_folder}/{conf.bert_model_name}"
-    class_name_2_tokenizer = {
-        "bert-base-cased": BertTokenizerFast,
-        "roberta-base": RobertaTokenizerFast,
-        "bert-base-multilingual-cased": BertTokenizerFast,
-        "xlm-roberta-base": XLMRobertaTokenizerFast,
-        'bert-base-chinese': BertTokenizerFast,
-        'hfl/chinese-bert-wwm-ext': BertTokenizerFast,
-        'hfl/chinese-roberta-wwm-ext': BertTokenizerFast,
-    }
 
-    TOKENIZER_CLASS_NAME = class_name_2_tokenizer[bert_model_name]
-    ## update to latest type classification
-
-    tokenizer = TOKENIZER_CLASS_NAME.from_pretrained(bert_model_name)
+    tokenizer = AutoTokenizer.from_pretrained(bert_model_name, use_fast=True)
 
 
     uni_labels = [
