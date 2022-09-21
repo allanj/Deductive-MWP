@@ -34,11 +34,8 @@ class Config:
         self.bert_model_name = args.bert_model_name
         self.bert_folder = args.bert_folder
         self.height = args.height
-        self.consider_multiple_m0 = args.consider_multiple_m0
         self.var_update_mode = args.var_update_mode
 
-        self.use_constant = args.use_constant
-        self.add_replacement = args.add_replacement
 
         self.train_file = args.train_file
         self.dev_file = args.dev_file
