@@ -215,7 +215,7 @@ def get_batched_prediction_consider_multiple_m0(feature, all_logits: torch.Float
 
 
 def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, fp16:bool, constant_values: List, uni_labels:List,
-             res_file: str= None, err_file:str = None, num_beams:int = 1) -> Tuple[float, float]:
+             res_file: str= None, err_file:str = None) -> Tuple[float, float]:
     model.eval()
     predictions = []
     labels = []
@@ -224,27 +224,15 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         for index, feature in tqdm(enumerate(valid_dataloader), desc="--validation", total=len(valid_dataloader)):
             with torch.cuda.amp.autocast(enabled=fp16):
                 module = model.module if hasattr(model, 'module') else model
-                if num_beams == 1:
-                    all_logits = module(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                                 token_type_ids=feature.token_type_ids.to(dev),
-                                 variable_indexs_start=feature.variable_indexs_start.to(dev),
-                                 variable_indexs_end=feature.variable_indexs_end.to(dev),
-                                 num_variables = feature.num_variables.to(dev),
-                                 variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                                 return_dict=True, is_eval=True).all_logits
-                    batched_prediction = get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num)
-                else:
-                    batched_prediction, _ =  module.beam_search(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
-                                 token_type_ids=feature.token_type_ids.to(dev),
-                                 variable_indexs_start=feature.variable_indexs_start.to(dev),
-                                 variable_indexs_end=feature.variable_indexs_end.to(dev),
-                                 num_variables = feature.num_variables.to(dev),
-                                 variable_index_mask= feature.variable_index_mask.to(dev),
-                                 labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
-                                 return_dict=True, is_eval=True, num_beams=num_beams)
-                    batched_prediction = batched_prediction[:, 0, :, :].numpy().astype(int).tolist()
-                ## post process remve extra
+                all_logits = module(input_ids=feature.input_ids.to(dev), attention_mask=feature.attention_mask.to(dev),
+                             token_type_ids=feature.token_type_ids.to(dev),
+                             variable_indexs_start=feature.variable_indexs_start.to(dev),
+                             variable_indexs_end=feature.variable_indexs_end.to(dev),
+                             num_variables = feature.num_variables.to(dev),
+                             variable_index_mask= feature.variable_index_mask.to(dev),
+                             labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
+                             return_dict=True, is_eval=True).all_logits
+                batched_prediction = get_batched_prediction_consider_multiple_m0(feature=feature, all_logits=all_logits, constant_num=constant_num)
                 for b, inst_predictions in enumerate(batched_prediction):
                     for p, prediction_step in enumerate(inst_predictions):
                         left, right, op_id, stop_id = prediction_step
