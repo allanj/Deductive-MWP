@@ -10,7 +10,7 @@ import numpy as np
 from src.utils import read_data, write_data
 import collections
 import re
-from src.eval.utils import compute_value, compute_value_for_incremental_equations, compute_value_for_parallel_equations
+from src.eval.utils import compute_value_for_incremental_equations
 import math
 from typing import Dict, List
 from collections import Counter
@@ -41,28 +41,25 @@ class UniversalDataset(Dataset):
                  tokenizer: PreTrainedTokenizerFast,
                  uni_labels:List[str],
                  pretrained_model_name:str,
-                 number: int = -1, add_replacement: bool = False,
+                 number: int = -1,
                  filtered_steps: List = None,
                  constant2id: Dict[str, int] = None,
                  constant_values: List[float] = None,
-                 use_incremental_labeling: bool = False,
                  data_max_height: int = 100) -> None:
         self.tokenizer = tokenizer
         self.constant2id = constant2id
         self.constant_values = constant_values
         self.constant_num = len(self.constant2id) if self.constant2id else 0
-        self.use_incremental_labeling = use_incremental_labeling
-        self.add_replacement = add_replacement
         self.data_max_height = data_max_height
         self.uni_labels = uni_labels
         self.quant_list = class_name_2_quant_list[pretrained_model_name]
         filtered_steps = [int(v) for v in filtered_steps] if filtered_steps is not None else None
-        self.read_math23k_file(file, tokenizer, number, add_replacement, filtered_steps)
+        self.read_math23k_file(file, tokenizer, number, filtered_steps)
 
 
     def read_math23k_file(self, file: Union[str, None],
                  tokenizer: PreTrainedTokenizerFast,
-                 number: int = -1, add_replacement: bool = False,
+                 number: int = -1,
                  filtered_steps: List = None) -> None:
         data = read_data(file=file)
         if number > 0:
@@ -138,10 +135,7 @@ class UniversalDataset(Dataset):
                 except:
                     found_duplication_inst_num += 1
 
-            if self.use_incremental_labeling:
-                labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=add_replacement)
-            else:
-                labels = self.get_label_ids_updated(obj["equation_layer"], add_replacement=add_replacement)
+            labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
 
             if not labels:
                 filter_type_count["cannot obtain the label sequence"] += 1
@@ -160,10 +154,7 @@ class UniversalDataset(Dataset):
                 obj['type_str'] = "illegal"
                 continue
             try:
-                if self.use_incremental_labeling:
-                    res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
-                else:
-                    res = compute_value(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
+                res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
             except:
                 # print("answer calculate exception")
                 filter_type_count[f"answer_calculate_exception"] += 1
@@ -236,86 +227,6 @@ class UniversalDataset(Dataset):
 
     def __getitem__(self, idx) -> UniFeature:
         return self._features[idx]
-
-
-    def get_label_ids(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
-        # in this data, only have one or zero bracket
-        label_ids = []
-        for l_idx, layer in enumerate(equation_layers):
-            left_var, right_var, op = layer
-            if left_var == right_var and (not add_replacement):
-                return None
-            is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
-
-            left_var_idx = (ord(left_var) - ord('a')) if left_var != "#" else -1
-            right_var_idx = (ord(right_var) - ord('a'))
-            assert right_var_idx >= 0
-            try:
-                assert left_var_idx >=0 or left_var_idx == -1
-            except:
-                return "index error"
-            if left_var_idx < right_var_idx:
-                op_idx = self.uni_labels.index(op)
-                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
-            else:
-                # left > right
-                if op in ["+", "*"]:
-                    op_idx = self.uni_labels.index(op)
-                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
-                else:
-                    assert not op.endswith("_rev")
-                    op_idx = self.uni_labels.index(op + "_rev")
-                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
-        return label_ids
-
-
-    def get_label_ids_updated(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
-        # in this data, only have one or zero bracket
-        label_ids = []
-        num_constant = len(self.constant2id) if self.constant2id is not None else 0
-        for l_idx, layer in enumerate(equation_layers):
-            left_var, right_var, op = layer
-            if left_var == right_var and (not add_replacement):
-                return None
-            is_stop = 1 if l_idx == len(equation_layers) - 1 else 0
-
-            if left_var != "#" and (not left_var.startswith("m_")):
-                if self.constant2id is not None and left_var in self.constant2id:
-                    left_var_idx = self.constant2id[left_var]
-                else:
-                    # try:
-                    assert ord(left_var) >= ord('a') and ord(left_var) <= ord('z')
-                    # except:
-                    #     print("seohting")
-                    left_var_idx = (ord(left_var) - ord('a') + num_constant)
-            else:
-                left_var_idx = -1
-            right_var_idx = (ord(right_var) - ord('a') + num_constant) if self.constant2id is None or (right_var not in self.constant2id) else self.constant2id[right_var]
-            # try:
-            assert right_var_idx >= 0
-            # except:
-            #     print("right var index error")
-            #     return "right var index error"
-            # try:
-            assert left_var_idx >= -1
-            # except:
-            #     return "index error"
-            if left_var_idx <= right_var_idx:
-                if left_var_idx == right_var_idx and op.endswith("_rev"):
-                    op = op[:-4]
-                op_idx = self.uni_labels.index(op)
-                label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
-            else:
-                # left > right
-                if (op in ["+", "*"]):
-                    op_idx = self.uni_labels.index(op)
-                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
-                else:
-                    # assert not op.endswith("_rev")
-                    op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else  self.uni_labels.index(op[:-4])
-                    label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
-        return label_ids
-
 
     def get_label_ids_incremental(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
@@ -408,15 +319,12 @@ class UniversalDataset(Dataset):
                         label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
         return label_ids
 
-
     def collate_function(self, batch: List[UniFeature]):
 
         max_wordpiece_length = max([len(feature.input_ids)  for feature in batch])
         max_num_variable = max([feature.num_variables  for feature in batch])
         max_height = max([len(feature.labels) for feature in batch])
-        padding_value = [-1, 0, 0, 0] if not self.use_incremental_labeling else [0,0,0,0]
-        if self.use_incremental_labeling and not self.add_replacement:
-            padding_value = [0, 1, 0, 0]
+        padding_value = [0,0,0,0]
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -455,14 +363,14 @@ def main_for_mawps():
     pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
     tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
     test_dataset = UniversalDataset(file="../../data/mawps-single/mawps_test_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                                    pretrained_model_name=pretrained_language_moel)
     train_dataset = UniversalDataset(file="../../data/mawps-single/mawps_train_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                                     pretrained_model_name=pretrained_language_moel)
     validation_dataset = UniversalDataset(file="../../data/mawps-single/mawps_valid_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                                          pretrained_model_name=pretrained_language_moel)
 
 def main_for_svamp():
     uni_labels = [
@@ -475,11 +383,11 @@ def main_for_svamp():
     pretrained_language_moel = 'roberta-base' ## bert-base-cased, roberta-base, bert-base-multilingual-cased, xlm-roberta-base
     tokenizer = class_name_2_tokenizer[pretrained_language_moel].from_pretrained(pretrained_language_moel)
     UniversalDataset(file="../../data/mawps_asdiv-a_svamp/testset_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/mawps_asdiv-a_svamp/trainset_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_moel)
 
 def main_for_math23k():
     pretrained_language_model = 'hfl/chinese-roberta-wwm-ext'
@@ -492,16 +400,16 @@ def main_for_math23k():
     # uni_labels += ["^", "^_rev"]
     data_max_height = 15
     UniversalDataset(file="../../data/math23k/test23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_model,
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_model,
                      data_max_height = data_max_height)
     UniversalDataset(file="../../data/math23k/train23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_model,
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_model,
                      data_max_height=data_max_height, filtered_steps=None)
     UniversalDataset(file="../../data/math23k/valid23k_processed_nodup.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_model,
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_model,
                      data_max_height=data_max_height)
 
 def main_for_mathqa():
@@ -527,14 +435,14 @@ def main_for_mathqa():
     #                  constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement,
     #                  use_incremental_labeling=use_incremental_labeling, add_new_token=False, pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/MathQA/mathqa_test_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/MathQA/mathqa_dev_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_moel)
     UniversalDataset(file="../../data/MathQA/mathqa_train_nodup_our_filtered.json", tokenizer=tokenizer, uni_labels=uni_labels,
-                     constant2id=constant2id, constant_values=constant_values, add_replacement=add_replacement, data_max_height=data_max_height,
-                     use_incremental_labeling=use_incremental_labeling, pretrained_model_name=pretrained_language_moel)
+                     constant2id=constant2id, constant_values=constant_values,
+                     pretrained_model_name=pretrained_language_moel)
 
 if __name__ == '__main__':
     logger.addHandler(logging.StreamHandler())
