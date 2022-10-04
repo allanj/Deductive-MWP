@@ -9,8 +9,6 @@ from transformers.modeling_outputs import (
 from dataclasses import dataclass
 from typing import Optional, List
 
-from src.model.beam_search_scorer import BeamSearchScorer
-
 @dataclass
 class UniversalOutput(ModelOutput):
     """
