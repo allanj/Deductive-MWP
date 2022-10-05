@@ -54,9 +54,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--train_filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--test_filtered_steps', default=None, nargs='+', help="some heights to filter")
-    # parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
 
-    # parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
 
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
@@ -72,6 +70,8 @@ def parse_arguments(parser:argparse.ArgumentParser):
     # parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
     parser.add_argument('--var_update_mode', type=str, default="gru", help="variable update mode")
+    parser.add_argument('--temperature', type=float, default=1.0, help="temperature for contrastive loss")
+    parser.add_argument('--use_contrastive', type=int, default=0, help="whether to add contrastive loss")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -110,7 +110,10 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            num_labels=num_labels,
                                            height=config.height,
                                            constant_num=constant_num,
-                                            var_update_mode=config.var_update_mode, return_dict=True).to(dev)
+                                            var_update_mode=config.var_update_mode,
+                                        temperature=config.temperature,
+                                        use_contrastive=config.use_contrastive,
+                                        return_dict=True).to(dev)
 
     if config.parallel:
         model = nn.DataParallel(model)
@@ -398,7 +401,9 @@ def main():
                                                num_labels=num_labels,
                                                height = conf.height,
                                                constant_num = constant_number,
-                                            var_update_mode=conf.var_update_mode).to(conf.device)
+                                               var_update_mode=conf.var_update_mode,
+                                               temperature=conf.temperature,
+                                               use_contrastive=conf.use_contrastive).to(conf.device)
         logger.info("[Data Info] Reading test data")
         eval_dataset = UniversalDataset(file=conf.test_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, data_max_height=conf.height, pretrained_model_name=bert_model_name)

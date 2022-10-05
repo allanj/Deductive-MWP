@@ -35,6 +35,8 @@ class Config:
         self.bert_folder = args.bert_folder
         self.height = args.height
         self.var_update_mode = args.var_update_mode
+        self.temperature = args.temperature
+        self.use_contrastive = args.use_contrastive
 
 
         self.train_file = args.train_file

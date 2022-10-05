@@ -78,6 +78,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
     parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
     parser.add_argument('--var_update_mode', type=str, default="gru", help="variable update mode")
+    parser.add_argument('--temperature', type=float, default=1.0, help="temperature for contrastive loss")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -444,7 +445,9 @@ def main():
                                                height = conf.height,
                                                constant_num = constant_number,
                                             add_replacement=bool(conf.add_replacement), consider_multiple_m0=conf.consider_multiple_m0,
-                                            var_update_mode=conf.var_update_mode).to(conf.device)
+                                            var_update_mode=conf.var_update_mode,
+                                               temperature=conf.temperature,
+                                               use_contrastive=conf.use_contrastive).to(conf.device)
         logger.info("[Data Info] Reading test data")
         eval_dataset = UniversalDataset(file=conf.dev_file, tokenizer=tokenizer, uni_labels=conf.uni_labels, number=conf.dev_num, filtered_steps=opt.test_filtered_steps,
                                         constant2id=constant2id, constant_values=constant_values, add_replacement=bool(conf.add_replacement),
