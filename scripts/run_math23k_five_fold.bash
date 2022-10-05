@@ -1,9 +1,6 @@
 #!/bin/bash
 
 
-use_constant=1
-add_replacement=1
-consider_multiple_m0=1
 var_update_modes=(gru attn)
 bert_folders=(hfl hfl none none)
 bert_model_names=(chinese-bert-wwm-ext chinese-roberta-wwm-ext bert-base-multilingual-cased xlm-roberta-base)
@@ -27,12 +24,9 @@ for (( d=0; d<${#var_update_modes[@]}; d++  )) do
                         --height=10 \
                         --train_max_height=14 \
                         --num_epochs=${epoch} \
-                        --consider_multiple_m0=${consider_multiple_m0} \
                         --train_file=data/math23k_five_fold/train_${fold_num}.json  \
                         --dev_file=data/math23k_five_fold/test_${fold_num}.json \
                         --test_file=none \
-                        --use_constant=${use_constant}  \
-                        --add_replacement=${add_replacement} \
                         --train_num=-1 \
                         --dev_num=-1 \
                         --bert_folder=${bert_folder} \

@@ -54,9 +54,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--train_filtered_steps', default=None, nargs='+', help="some heights to filter")
     parser.add_argument('--test_filtered_steps', default=None, nargs='+', help="some heights to filter")
-    # parser.add_argument('--use_constant', default=1, type=int, choices=[0,1], help="whether to use constant 1 and pi")
-
-    # parser.add_argument('--add_replacement', default=1, type=int, choices=[0,1], help = "use replacement when computing combinations")
 
     # model
     parser.add_argument('--seed', type=int, default=42, help="random seed")
@@ -69,7 +66,6 @@ def parse_arguments(parser:argparse.ArgumentParser):
     #                     help="The bert model name to used")
     parser.add_argument('--height', type=int, default=10, help="the model height")
     parser.add_argument('--train_max_height', type=int, default=100, help="the maximum height for training data")
-    # parser.add_argument('--consider_multiple_m0', type=int, default=1, help="whether or not to consider multiple m0")
 
     parser.add_argument('--var_update_mode', type=str, default="gru", help="variable update mode")
 
@@ -112,9 +108,6 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            constant_num=constant_num,
                                             var_update_mode=config.var_update_mode, return_dict=True).to(dev)
 
-    if config.parallel:
-        model = nn.DataParallel(model)
-
     scaler = None
     if config.fp16:
         scaler = torch.cuda.amp.GradScaler(enabled=bool(config.fp16))
@@ -139,8 +132,6 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                              variable_index_mask= feature.variable_index_mask.to(dev),
                              labels=feature.labels.to(dev), label_height_mask= feature.label_height_mask.to(dev),
                              return_dict=True).loss
-            if config.parallel:
-                loss = loss.sum()
             if config.fp16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -290,7 +281,7 @@ def evaluate(valid_dataloader: DataLoader, model: nn.Module, dev: torch.device, 
         inst['pred_ground_equation'] = pred_ground_equation
         inst['gold_ground_equation'] = gold_ground_equation
     val_acc = val_corr * 1.0 / adjusted_total
-    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {corr}, adjusted_total: {adjusted_total}")
+    logger.info(f"[Info] Value accuracy: {val_acc * 100:.2f}%, total: {total}, corr: {val_corr}, adjusted_total: {adjusted_total}")
     for key in num_label_step_total:
         curr_corr = num_label_step_corr[key]
         curr_val_corr = num_label_step_val_corr[key]
@@ -312,7 +303,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(bert_model_name, use_fast=True)
 
-    ##default
+
     uni_labels = [
         '+', '-', '-_rev', '*', '/', '/_rev'
     ]
