@@ -75,6 +75,7 @@ def parse_arguments(parser:argparse.ArgumentParser):
 
     parser.add_argument('--var_update_mode', type=str, default="gru", help="variable update mode")
     parser.add_argument('--temperature', type=float, default=1.0, help="temperature for contrastive loss")
+    parser.add_argument('--use_contrastive', type=int, default=0, help="whether to use contrastive loss")
 
     # training
     parser.add_argument('--mode', type=str, default="train", choices=["train", "test"], help="learning rate of the AdamW optimizer")
@@ -111,10 +112,13 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
     constant_num = len(constant_values) if constant_values else 0
     MODEL_CLASS = class_name_2_model[bert_model_name]
     model = MODEL_CLASS.from_pretrained(bert_model_name,
-                                           num_labels=num_labels,
-                                           height=config.height,
-                                           constant_num=constant_num,
-                                            var_update_mode=config.var_update_mode, return_dict=True)
+                                        num_labels=num_labels,
+                                        height=config.height,
+                                        constant_num=constant_num,
+                                        var_update_mode=config.var_update_mode,
+                                        temperature=config.temperature,
+                                        use_contrastive=config.use_contrastive,
+                                        return_dict=True)
 
     optimizer, scheduler = get_optimizers(config, model, t_total)
     model.zero_grad()
