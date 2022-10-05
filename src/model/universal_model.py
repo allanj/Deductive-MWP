@@ -243,7 +243,7 @@ def initialize_param(cls, config, constant_num, height, var_update_mode, tempera
 
     cls.label_rep2label = nn.Linear(config.hidden_size, 1)  # 0 or 1
     cls.max_height = height  ## 3 operation
-    cls.temperature = temperature
+    cls.temp = temperature
     cls.use_contrastive = use_contrastive
     cls.linears = nn.ModuleList()
     for i in range(cls.num_labels):
@@ -371,7 +371,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                  constant_num: int = 0,
                  var_update_mode: str= 'gru',
                  temperature: float = 1.0,
-                 use_constrastive: bool = False):
+                 use_contrastive: bool = False):
         super().__init__(config)
         self.num_labels = config.num_labels  ## should be 6
         assert self.num_labels == 6 or self.num_labels == 8
@@ -384,7 +384,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
                          height=height,
                          var_update_mode=var_update_mode,
                          temperature=temperature,
-                         use_constrastive=use_constrastive)
+                         use_contrastive=use_contrastive)
 
 
     def forward(self,
@@ -577,7 +577,7 @@ def pretrain_rep(cls,
                     gold_comb_rep = m0_label_rep[b_idxs, judge]  ## batch_size x label_size x hidden_size
                     gold_comb_label_rep_drop = m0_label_rep_drop[b_idxs, judge, m0_gold_labels[:, 2]]  ## batch_size x hidden_size
 
-                    gold_label_rep = gold_comb_rep[b_idxs, judge, m0_gold_labels[:, 2]].unsqueeze(1).expand(batch_size, cls.num_labels, hidden_size).contiguous()  ## batch_size x label_size x hidden_size
+                    gold_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]].unsqueeze(1).expand(batch_size, cls.num_labels, hidden_size).contiguous()  ## batch_size x label_size x hidden_size
                     gold_label_rep[b_idxs, m0_gold_labels[:, 2]] = gold_comb_label_rep_drop  ## batch_size x hidden_size
 
                     sim_logits = cos(gold_label_rep, gold_comb_rep) / cls.temp # batch_size x label_size
@@ -655,7 +655,7 @@ def pretrain_rep(cls,
                     gold_comb_rep = mi_label_rep[b_idxs, judge]  ## batch_size x label_size x hidden_size
                     gold_comb_label_rep_drop = mi_label_rep_drop[b_idxs, judge, mi_gold_labels[:, 2]]  ## batch_size x hidden_size
 
-                    gold_label_rep = gold_comb_rep[b_idxs, judge, mi_gold_labels[:, 2]].unsqueeze(1).expand(batch_size, cls.num_labels,
+                    gold_label_rep = mi_label_rep[b_idxs, judge, mi_gold_labels[:, 2]].unsqueeze(1).expand(batch_size, cls.num_labels,
                                                                                                             hidden_size).contiguous()  ## batch_size x label_size x hidden_size
                     gold_label_rep[b_idxs, mi_gold_labels[:, 2]] = gold_comb_label_rep_drop  ## batch_size x hidden_size
 
