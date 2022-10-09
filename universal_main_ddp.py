@@ -112,7 +112,8 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
 
     gradient_accumulation_steps = 1
     t_total = int(len(train_dataloader) // gradient_accumulation_steps * num_epochs)
-    t_total = int(t_total // accelerator.num_processes)
+    # the following line is not required, because accelerate handle that
+    # t_total = int(t_total // accelerator.num_processes)
 
     constant_num = len(constant_values) if constant_values else 0
     MODEL_CLASS = class_name_2_model[bert_model_name]
