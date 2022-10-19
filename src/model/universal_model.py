@@ -41,24 +41,25 @@ def get_combination_mask(batched_num_variables: torch.Tensor, combination: torch
 
 
 def deductive_forward(cls,
-        encoder,
-        input_ids=None, ## batch_size  x max_seq_length
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        variable_indexs_start: torch.Tensor = None, ## batch_size x num_variable
-        variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
-        num_variables: torch.Tensor = None, # batch_size [3,4]
-        variable_index_mask:torch.Tensor = None, # batch_size x num_variable
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,
-        ## (batch_size, height, 4). (left_var_index, right_var_index, label_index, stop_label) when height>=1, left_var_index always -1, because left always m0
-        label_height_mask = None, #  (batch_size, height)
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        is_eval=False):
+                      encoder,
+                      input_ids=None,  ## batch_size  x max_seq_length
+                      attention_mask=None,
+                      token_type_ids=None,
+                      position_ids=None,
+                      variable_indexs_start: torch.Tensor = None,  ## batch_size x num_variable
+                      variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
+                      num_variables: torch.Tensor = None,  # batch_size [3,4]
+                      variable_index_mask: torch.Tensor = None,  # batch_size x num_variable
+                      relevant_variables: torch.Tensor = None,
+                      head_mask=None,
+                      inputs_embeds=None,
+                      labels=None,
+                      ## (batch_size, height, 4). (left_var_index, right_var_index, label_index, stop_label) when height>=1, left_var_index always -1, because left always m0
+                      label_height_mask=None,  # (batch_size, height)
+                      output_attentions=None,
+                      output_hidden_states=None,
+                      return_dict=None,
+                      is_eval=False):
     r"""
     labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
         Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
@@ -136,7 +137,8 @@ def deductive_forward(cls,
             ## batch_size, num_combinations/num_m0, num_labels, 2
             m0_stopper_logits = cls.stopper(cls.stopper_transformation(m0_label_rep))
 
-            var_scores = cls.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+            initial_var_scores =  cls.variable_scorer(var_hidden_states)
+            var_scores = initial_var_scores[:, : , 1]  ## batch_size x max_num_variable
             expanded_var_scores = torch.gather(var_scores, 1, combination.unsqueeze(0).expand(batch_size, num_combinations, 2).view(batch_size, -1)).unsqueeze(
                 -1).view(batch_size, num_combinations, 2)
             expanded_var_scores = expanded_var_scores.sum(dim=-1).unsqueeze(-1).unsqueeze(-1).expand(batch_size, num_combinations, cls.num_labels, 2)
@@ -167,6 +169,11 @@ def deductive_forward(cls,
 
                 best_mi_label_rep = m0_label_rep[b_idxs, judge, m0_gold_labels[:, 2]]  ## teacher-forcing.
                 best_mi_scores = m0_logits[b_idxs, judge, m0_gold_labels[:, 2]][:, 0]  # batch_size
+
+                ce_loss_funct = nn.CrossEntropyLoss()
+                var_score_loss = ce_loss_funct(initial_var_scores.view(-1, 2), relevant_variables.view(-1))
+                loss = loss + var_score_loss
+
             else:
                 best_m0_label_rep = m0_label_rep[b_idxs, best_comb, best_label]  # batch_size x hidden_size
                 best_mi_label_rep = best_m0_label_rep
@@ -203,7 +210,7 @@ def deductive_forward(cls,
                                                                                                 2).float().log()
 
             mi_stopper_logits = cls.stopper(cls.stopper_transformation(mi_label_rep))
-            var_scores = cls.variable_scorer(var_hidden_states).squeeze(-1)  ## batch_size x max_num_variable
+            var_scores = cls.variable_scorer(var_hidden_states)[:, : ,1]  ## batch_size x max_num_variable
             expanded_var_scores = torch.gather(var_scores, 1,
                                                combination.unsqueeze(0).expand(batch_size, num_combinations, 2).view(batch_size, -1)).unsqueeze(-1).view(
                 batch_size, num_combinations, 2)
@@ -285,7 +292,7 @@ def initialize_param(cls, config, constant_num, height, var_update_mode):
         nn.ReLU(),
         nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
         nn.Dropout(config.hidden_dropout_prob),
-        nn.Linear(config.hidden_size, 1),
+        nn.Linear(config.hidden_size, 2),
     )
 
     cls.init_weights()

@@ -32,7 +32,7 @@ class_name_2_quant_list = {
     'hfl/chinese-roberta-wwm-ext': ['<', 'q', '##uan', '##t', '>'],
 }
 
-UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask')
+UniFeature = collections.namedtuple('UniFeature', 'input_ids attention_mask token_type_ids variable_indexs_start variable_indexs_end num_variables variable_index_mask labels label_height_mask relevant_variables')
 UniFeature.__new__.__defaults__ = (None,) * 7
 
 class UniversalDataset(Dataset):
@@ -77,6 +77,7 @@ class UniversalDataset(Dataset):
         filter_type_count = Counter()
         found_duplication_inst_num = 0
         filter_step_count = 0
+
         for obj in tqdm(data, desc='Tokenization', total=len(data)):
             mapped_text = obj["text"]
             sent_len = len(mapped_text.split())
@@ -136,7 +137,7 @@ class UniversalDataset(Dataset):
                     found_duplication_inst_num += 1
 
             labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
-
+            relevant_variables = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
             if not labels:
                 filter_type_count["cannot obtain the label sequence"] += 1
                 obj['type_str'] = "illegal"
@@ -204,7 +205,8 @@ class UniversalDataset(Dataset):
                            num_variables=num_variable,
                            variable_index_mask=var_mask,
                            labels = labels,
-                           label_height_mask=label_height_mask)
+                           label_height_mask=label_height_mask,
+                           relevant_variables=relevant_variables)
             )
             self.insts.append(obj)
         logger.info(f", total number instances: {len(self._features)} (before filter: {len(data)}), max num steps: {max_num_steps}")
@@ -227,6 +229,32 @@ class UniversalDataset(Dataset):
 
     def __getitem__(self, idx) -> UniFeature:
         return self._features[idx]
+
+    def get_relevant_variable(self, equation_layers: List, num_variable_excluding_constant: int):
+        """
+        Run the `get_label_ids_incremental` function first, before running this.
+        we only operate on the first layer
+        :param equation_layers:
+        :param num_variable:
+        :return:
+        """
+        num_constant = len(self.constant2id) if self.constant2id is not None else 0
+        relevant_var = [0] * (num_variable_excluding_constant + num_constant)
+        for _, layer in enumerate(equation_layers):
+            left_var, right_var, op = layer
+            if (not left_var.startswith("m_")):
+                if self.constant2id is not None and left_var in self.constant2id:
+                    left_var_idx = self.constant2id[left_var]
+                else:
+                    left_var_idx = (ord(left_var) - ord('a') + num_constant)
+                relevant_var[left_var_idx] = 1
+            if (not right_var.startswith("m_")):
+                if self.constant2id is not None and right_var in self.constant2id:
+                    right_var_idx = self.constant2id[right_var]
+                else:
+                    right_var_idx = (ord(right_var) - ord('a') + num_constant)
+                relevant_var[right_var_idx] = 1
+        return relevant_var
 
     def get_label_ids_incremental(self, equation_layers: List, add_replacement: bool) -> Union[List[List[int]], None]:
         # in this data, only have one or zero bracket
@@ -325,6 +353,7 @@ class UniversalDataset(Dataset):
         max_num_variable = max([feature.num_variables  for feature in batch])
         max_height = max([len(feature.labels) for feature in batch])
         padding_value = [0,0,0,0]
+        max_relevant_variable = max([len(feature.relevant_variables) for feature in batch])
         for i, feature in enumerate(batch):
             padding_length = max_wordpiece_length - len(feature.input_ids)
             input_ids = feature.input_ids + [self.tokenizer.pad_token_id] * padding_length
@@ -339,6 +368,7 @@ class UniversalDataset(Dataset):
             labels = feature.labels + [padding_value]* padded_height ## useless, because we have height mask
             label_height_mask = feature.label_height_mask + [0] * padded_height
 
+            relevant_variables = feature.relevant_variables + [-100] * (max_relevant_variable - len(feature.relevant_variables))
 
             batch[i] = UniFeature(input_ids=np.asarray(input_ids),
                                 attention_mask=np.asarray(attn_mask),
@@ -348,7 +378,8 @@ class UniversalDataset(Dataset):
                                  num_variables=np.asarray(feature.num_variables),
                                  variable_index_mask=np.asarray(variable_index_mask),
                                  labels =np.asarray(labels),
-                                  label_height_mask=np.asarray(label_height_mask))
+                                  label_height_mask=np.asarray(label_height_mask),
+                                  relevant_variables = np.asarray(relevant_variables))
         results = UniFeature(*(default_collate(samples) for samples in zip(*batch)))
         return results
 
