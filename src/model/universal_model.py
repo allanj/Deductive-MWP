@@ -332,6 +332,7 @@ class UniversalModel(BertPreTrainedModel):
         variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
         num_variables: torch.Tensor = None, # batch_size [3,4]
         variable_index_mask:torch.Tensor = None, # batch_size x num_variable
+        relevant_variables: torch.Tensor = None,
         head_mask=None,
         inputs_embeds=None,
         labels=None,
@@ -353,6 +354,7 @@ class UniversalModel(BertPreTrainedModel):
             variable_indexs_end,
             num_variables,
             variable_index_mask,
+            relevant_variables,
             head_mask,
             inputs_embeds,
             labels,
@@ -392,6 +394,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
         variable_indexs_end: torch.Tensor = None,  ## batch_size x num_variable
         num_variables: torch.Tensor = None, # batch_size [3,4]
         variable_index_mask:torch.Tensor = None, # batch_size x num_variable
+        relevant_variables: torch.Tensor = None,
         head_mask=None,
         inputs_embeds=None,
         labels=None,
@@ -413,6 +416,7 @@ class UniversalModel_Roberta(RobertaPreTrainedModel):
             variable_indexs_end,
             num_variables,
             variable_index_mask,
+            relevant_variables,
             head_mask,
             inputs_embeds,
             labels,
