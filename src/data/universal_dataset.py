@@ -137,7 +137,7 @@ class UniversalDataset(Dataset):
                     found_duplication_inst_num += 1
 
             labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
-            relevant_variables = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
+            relevant_variables = self.get_relevant_variable(obj["equation_layer"], num_variable_excluding_constant=num_variable)
             if not labels:
                 filter_type_count["cannot obtain the label sequence"] += 1
                 obj['type_str'] = "illegal"
