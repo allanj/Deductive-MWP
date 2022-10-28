@@ -23,6 +23,7 @@ logger.setLevel(logging.INFO)
 class_name_2_quant_list = {
     "bert-base-cased": ['<', 'q', '##uant', '>'],
     "roberta-base": ['Ġ<', 'quant', '>'],
+    "roberta-large": ['Ġ<', 'quant', '>'],
     "coref-roberta-base": ['Ġ<', 'quant', '>'],
     "roberta-large": ['Ġ<', 'quant', '>'],
     "bert-base-multilingual-cased": ['<', 'quant', '>'],
@@ -94,7 +95,7 @@ class UniversalDataset(Dataset):
                         input_text += word + " "
                     else:
                         input_text += word
-            elif "MathQA" in file or "mawps" in file or "svamp" in file:
+            elif "MathQA" in file or "mawps" in file or "svamp" in file or 'gsm8k' in file:
                 input_text = ' '.join(mapped_text.split())
             else:
                 raise NotImplementedError("The file type is not supported")
@@ -115,10 +116,10 @@ class UniversalDataset(Dataset):
             assert len(input_ids) < 512 ## make sure no error in tokenization
             num_variable = len(var_starts)
             assert len(var_starts) == len(obj["num_list"])
-            if len(obj["num_list"]) == 0:
-                filter_type_count["no detected variable"] += 1
-                obj['type_str'] = "no detected variable"
-                continue
+            # if len(obj["num_list"]) == 0:
+            #     filter_type_count["no detected variable"] += 1
+            #     obj['type_str'] = "no detected variable"
+            #     continue
             var_mask = [1] * num_variable
             if len(obj["equation_layer"])  == 0:
                 filter_type_count["empty equation in the data"]  += 1
@@ -134,6 +135,14 @@ class UniversalDataset(Dataset):
                     assert len(eq_set) == len(obj["equation_layer"])
                 except:
                     found_duplication_inst_num += 1
+
+            contain_invalid_op = False
+            for eq_layer in obj["equation_layer"]:
+                if eq_layer[2] == '//':
+                    contain_invalid_op = True
+            if contain_invalid_op:
+                filter_type_count['contain_invalid_op'] += 1
+                continue
 
             labels = self.get_label_ids_incremental(obj["equation_layer"], add_replacement=True)
 
@@ -155,11 +164,17 @@ class UniversalDataset(Dataset):
                 continue
             try:
                 res, _ = compute_value_for_incremental_equations(labels, obj["num_list"], self.constant_num, uni_labels=self.uni_labels, constant_values=self.constant_values)
-            except:
+            except Exception as e:
                 # print("answer calculate exception")
                 filter_type_count[f"answer_calculate_exception"] += 1
                 obj['type_str'] = "illegal"
-                continue
+                print(labels, obj["num_list"], self.constant_num, self.uni_labels, self.constant_values)
+                print(len(self.constant_values))
+                import json
+                print(json.dumps(obj, indent=2, ensure_ascii=False))
+                print(e)
+                raise
+                # continue
 
             diff = res - float(obj["answer"])
             try:
@@ -282,7 +297,10 @@ class UniversalDataset(Dataset):
                     label_ids.append([left_var_idx, right_var_idx, op_idx, is_stop])
                 elif not left_var.startswith("m_") and right_var.startswith("m_"):
                     assert left_var_idx > right_var_idx
-                    op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else self.uni_labels.index(op[:-4])
+                    if (op not in ["+", "*"]):
+                        op_idx = self.uni_labels.index(op + "_rev") if not op.endswith("_rev") else self.uni_labels.index(op[:-4])
+                    else:
+                        op_idx = self.uni_labels.index(op)
                     label_ids.append([right_var_idx, left_var_idx, op_idx, is_stop])
                 else:
                     ## both starts with m

@@ -36,6 +36,7 @@ else:
 class_name_2_model = {
         "bert-base-cased": UniversalModel,
         "roberta-base": UniversalModel_Roberta,
+        "roberta-large": UniversalModel_Roberta,
         "bert-base-multilingual-cased": UniversalModel,
         'bert-base-chinese': UniversalModel,
         "xlm-roberta-base": UniversalModel_Roberta,
@@ -330,6 +331,12 @@ def main():
         constant2id = {c: idx for idx, c in enumerate(constants)}
         constant_values = [float(c) for c in constants]
         constant_number = len(constant_values)
+    elif 'gsm8k_main' in conf.train_file:
+        constant_values = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.1111111111111111, 0.125, 0.14285714285714285, 0.16666666666666666, 0.2, 0.25, 0.3333333333333333, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 16.0, 24.0, 30.0, 50.0, 52.0, 60.0, 100.0, 365.0, 366.0, 1000.0]
+        constant_number = len(constant_values)
+        constants = [str(num) for num in constant_values]
+        constant2id = {c: idx for idx, c in enumerate(constants)}
+        num_labels = len(conf.uni_labels)
     else:
         constant2id = None
         constant_values = None
