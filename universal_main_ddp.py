@@ -117,7 +117,7 @@ def train(config: Config, train_dataloader: DataLoader, num_epochs: int,
                                            constant_num=constant_num,
                                             var_update_mode=config.var_update_mode, return_dict=True)
 
-    optimizer, scheduler = get_optimizers(config, model, t_total)
+    optimizer, scheduler = get_optimizers(config, model, t_total, warmup_step=0)
     model.zero_grad()
 
     best_equ_acc = -1
