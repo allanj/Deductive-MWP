@@ -2,6 +2,7 @@
 
 This is the offcial repo for the ACL-2022 paper "[Learning to Reason Deductively: Math Word Problem Solving as Complex Relation Extraction](https://arxiv.org/abs/2203.10316)".
 
+<img width="1341" alt="Screenshot 2022-11-14 at 4 42 03 PM" src="https://user-images.githubusercontent.com/3351187/201614535-b8323ca0-ed31-4bbc-947f-8e5f0b7b6f7d.png">
 
 ### Requirements
 * transformers `pip3 install transformers`
